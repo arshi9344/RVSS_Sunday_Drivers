@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 
 from steerDS import SteerDataSet
 
-torch.manual_seed(10)
+torch.manual_seed(42)
 
 def reset_weights(m):
     for layer in m.children():
@@ -67,17 +67,19 @@ class Net(nn.Module):
 ####     K-FOLD CROSS VALIDATION                                                                                                  ####
 #######################################################################################################################################
 ## setup the k-fold cross validation
-k_folds = 10
-num_epochs = 10
+k_folds = 5
+num_epochs = 30
 kf = KFold(n_splits=k_folds, shuffle=True, random_state=0)
 loss_function = nn.CrossEntropyLoss()
-net = Net()
-net.apply(reset_weights)
-optimizer = optim.Adam(net.parameters(), lr=1e-4)
+
 results = {}
 
-losses = {'train': [], 'val': []}
-accs = {'train': [], 'val': []}
+# Initialize metrics dictionaries with fold-specific keys
+losses = {f'train_fold_{i}': [] for i in range(k_folds)}
+losses.update({f'val_fold_{i}': [] for i in range(k_folds)})
+accs = {f'train_fold_{i}': [] for i in range(k_folds)}
+accs.update({f'val_fold_{i}': [] for i in range(k_folds)})
+
 best_acc = 0
 best_fold = -1
 
@@ -91,38 +93,43 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
     print(f'FOLD {fold}')
     print('--------------------------------')
     
+    # Data setup
     train_subsampler = SubsetRandomSampler(train_ids)
     val_subsampler = SubsetRandomSampler(val_ids)
-    
     trainloader = DataLoader(dataset, batch_size=8, sampler=train_subsampler)
     valloader = DataLoader(dataset, batch_size=1, sampler=val_subsampler)
     
-    for epoch in range(num_epochs):  # loop over the dataset multiple times
+    # Model setup
+    net = Net()
+    net.apply(reset_weights)
+    optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)
+
+    # Training loop
+    for epoch in range(num_epochs):
+        net.train()  # Set to training mode
         epoch_loss = 0.0
         correct = 0
         total = 0
         for i, data in enumerate(trainloader, 0):
+            # Training step
             inputs, labels = data
             optimizer.zero_grad()
             outputs = net(inputs)
             loss = loss_function(outputs, labels)
             loss.backward()
             optimizer.step()
+            
+            # Training metrics
             epoch_loss += loss.item()
             _, predicted = torch.max(outputs, 1)
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-        print(f'Epoch {epoch + 1} loss: {epoch_loss / len(trainloader)}')
-        losses['train'].append(epoch_loss / len(trainloader))
-        accs['train'].append(100. * correct / total)
-
-        correct_pred = {classname: 0 for classname in class_labels}
-        total_pred = {classname: 0 for classname in class_labels}
-
+        # Validation phase
+        net.eval()  # Set to evaluation mode
+        val_correct = 0
+        val_total = 0
         val_loss = 0
-        actual = []
-        predicted = []
         with torch.no_grad():
             for data in valloader:
                 images, labels = data
@@ -130,27 +137,27 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
                 _, predictions = torch.max(outputs, 1)
                 loss = loss_function(outputs, labels)
                 val_loss += loss.item()
-                actual.extend(labels.tolist())
-                predicted.extend(predictions.tolist())
-                for label, prediction in zip(labels, predictions):
-                    if label == prediction:
-                        correct_pred[class_labels[label.item()]] += 1
-                    total_pred[class_labels[label.item()]] += 1
+                val_total += labels.size(0)
+                val_correct += (predictions == labels).sum().item()
 
-        class_accs = []
-        for classname, correct_count in correct_pred.items():
-            accuracy = 100 * float(correct_count) / total_pred[classname]
-            class_accs.append(accuracy)
-
-        accs['val'].append(np.mean(class_accs))
-        losses['val'].append(val_loss / len(valloader))
-
-        if np.mean(class_accs) > best_acc:
-            best_acc = np.mean(class_accs)
+        # Record metrics
+        fold_accuracy = 100.0 * val_correct / val_total
+        if fold_accuracy > best_acc:
+            best_acc = fold_accuracy
             best_fold = fold
             torch.save(net.state_dict(), 'best_model.pth')
-    print('fold accuracy:', np.mean(class_accs))
-    results[fold] = np.mean(class_accs)  # Store accuracy for this fold
+        
+        # In the training loop, update the metrics storage
+        losses[f'train_fold_{fold}'].append(epoch_loss/len(trainloader))
+        accs[f'train_fold_{fold}'].append(100.0 * correct / total)
+        losses[f'val_fold_{fold}'].append(val_loss/len(valloader))
+        accs[f'val_fold_{fold}'].append(fold_accuracy)
+
+        print(f'Epoch {epoch + 1} - Training loss: {epoch_loss/len(trainloader):.4f}, '
+              f'Validation accuracy: {fold_accuracy:.2f}%')
+
+    # Store fold results
+    results[fold] = fold_accuracy
 
 #######################################################################################################################################
 ####     PERFORMANCE EVALUATION                                                                                                    ####
@@ -162,6 +169,9 @@ correct = 0
 total = 0
 actual = []  # Reset actual list for each fold
 predicted = []  # Reset predicted list for each fold
+correct_pred = {classname: 0 for classname in class_labels}
+total_pred = {classname: 0 for classname in class_labels}
+
 with torch.no_grad():
     for data in valloader:
             images, labels = data
@@ -171,6 +181,10 @@ with torch.no_grad():
             correct += (predictions == labels).sum().item()
             actual.extend(labels.tolist())
             predicted.extend(predictions.tolist())
+            for label, prediction in zip(labels, predictions):
+                if label == prediction:
+                    correct_pred[class_labels[label]] += 1
+                total_pred[class_labels[label]] += 1
 
     print(f'Accuracy of the network on the {total} validation images: {100 * correct // total} %')
 
@@ -179,31 +193,37 @@ with torch.no_grad():
     disp.plot()
     plt.show()
 
-    for classname, correct_count in correct_pred.items():
-        accuracy = 100 * float(correct_count) / total_pred[classname]
-        print(f'Accuracy for class: {classname:5s} is {accuracy:.1f}%')
+    # for classname, correct_count in correct_pred.items():
+    #     accuracy = 100 * float(correct_count) / total_pred[classname]
+    #     print(f'Accuracy for class: {classname:5s} is {accuracy:.1f}%')
 
 #######################################################################################################################################
 ####     PLOTTING METRICS                                                                                                          ####
 #######################################################################################################################################
 
-plt.figure(figsize=(12, 4))
-plt.subplot(1, 2, 1)
-plt.plot(losses['train'], label='Training Loss')
-plt.plot(losses['val'], label='Validation Loss')
-plt.xlabel('Epoch')
-plt.ylabel('Loss')
-plt.legend()
-plt.title('Loss over Epochs')
+# Create a figure with k_folds rows and 2 columns
+plt.figure(figsize=(15, 5*k_folds))
 
-plt.subplot(1, 2, 2)
-plt.plot(accs['train'], label='Training Accuracy')
-plt.plot(accs['val'], label='Validation Accuracy')
-plt.xlabel('Epoch')
-plt.ylabel('Accuracy (%)')
-plt.legend()
-plt.title('Accuracy over Epochs')
+for fold in range(k_folds):
+    # Training Loss subplot
+    plt.subplot(k_folds, 2, 2*fold + 1)
+    plt.plot(losses[f'train_fold_{fold}'], label='Training Loss')
+    plt.plot(losses[f'val_fold_{fold}'], label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title(f'Loss over Epochs - Fold {fold}')
 
+    # Accuracy subplot
+    plt.subplot(k_folds, 2, 2*fold + 2)
+    plt.plot(accs[f'train_fold_{fold}'], label='Training Accuracy')
+    plt.plot(accs[f'val_fold_{fold}'], label='Validation Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+    plt.legend()
+    plt.title(f'Accuracy over Epochs - Fold {fold}')
+
+plt.tight_layout()
 plt.show()
 
 print('--------------------------------')
