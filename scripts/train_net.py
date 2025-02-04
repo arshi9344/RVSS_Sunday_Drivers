@@ -138,8 +138,8 @@ net = Net()
 #for classification tasks
 criterion = nn.CrossEntropyLoss()
 #You could use also ADAM
-optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
-
+#optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
+optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)
 
 #######################################################################################################################################
 ####     TRAINING LOOP                                                                                                             ####
@@ -147,7 +147,7 @@ optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 losses = {'train': [], 'val': []}
 accs = {'train': [], 'val': []}
 best_acc = 0
-for epoch in range(10):  # loop over the dataset multiple times
+for epoch in range(30):  # loop over the dataset multiple times
 
     epoch_loss = 0.0
     correct = 0
@@ -215,12 +215,14 @@ plt.plot(losses['train'], label = 'Training')
 plt.plot(losses['val'], label = 'Validation')
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
+plt.legend()
 plt.show()
 
 plt.plot(accs['train'], label = 'Training')
 plt.plot(accs['val'], label = 'Validation')
 plt.xlabel('Epoch')
 plt.ylabel('Accuracy')
+plt.legend()
 plt.show()
 
 

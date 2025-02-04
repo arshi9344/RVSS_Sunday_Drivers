@@ -27,7 +27,7 @@ def reset_weights(m):
 #######################################################################################################################################
 
 transform = transforms.Compose([transforms.ToTensor(),
-                                transforms.Resize((20, 60)),
+                                transforms.Resize((60, 160)),
                                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
                                 ])
 
@@ -47,21 +47,70 @@ class_labels = list(set(dataset_train_part.class_labels + dataset_val_part.class
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = nn.Conv2d(3, 6, 5)
-        self.conv2 = nn.Conv2d(6, 16, 5)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(384, 256)
-        self.fc2 = nn.Linear(256, 5)
+
+        # Convolutional layers (Feature Extraction)
+        self.conv1 = nn.Conv2d(3, 6, kernel_size=5, stride=2, padding=2)
+        self.conv2 = nn.Conv2d(6, 16, kernel_size=5, stride=2, padding=2)
+        self.conv3 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
+        self.conv4 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
+        self.conv5 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+
+        # Pooling layer (Downsampling)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)  # Reduce spatial dimensions by 2x
+
+        # Fully Connected Layers (Decision Making)
+        self.fc1 = nn.Linear(2560, 256)  # Adjusted to match output feature map size
+        self.fc2 = nn.Linear(256, 128)  # Added extra FC layer for better decision-making
+        self.fc3 = nn.Linear(128, 5)  # Output layer (5 neurons, matching your original)
+        
+        # Activation function
         self.relu = nn.ReLU()
-    
+
     def forward(self, x):
-        x = self.pool(self.relu(self.conv1(x)))
-        x = self.pool(self.relu(self.conv2(x)))
-        x = torch.flatten(x, 1)
-        x = self.fc1(x)
-        x = self.relu(x)
-        x = self.fc2(x)
+        #print("Input shape:", x.shape)
+        
+        x = self.pool(self.relu(self.conv1(x)))  # Conv1 → ReLU → MaxPool
+        #print("After conv1:", x.shape)
+        
+        x = self.pool(self.relu(self.conv2(x)))  # Conv2 → ReLU → MaxPool
+        #print("After conv2:", x.shape)
+        
+        x = self.relu(self.conv3(x))  # Conv3 → ReLU
+        #print("After conv3:", x.shape)
+        
+        x = self.relu(self.conv4(x))  # Conv4 → ReLU
+        #print("After conv4:", x.shape)
+        
+        x = self.relu(self.conv5(x))  # Conv5 → ReLU
+        #print("After conv5:", x.shape)
+
+        # Flatten before feeding into fully connected layers
+        x = torch.flatten(x, start_dim=1)  # Flatten all dimensions except batch
+        #print("After flatten:", x.shape)
+
+        # Fully Connected Layers + Activation
+        x = self.relu(self.fc1(x))  # FC1 → ReLU
+        x = self.relu(self.fc2(x))  # FC2 → ReLU
+        x = self.fc3(x)  # Output layer (Linear activation for regression)
         return x
+
+    # def __init__(self):
+    #     super().__init__()
+    #     self.conv1 = nn.Conv2d(3, 6, 5)
+    #     self.conv2 = nn.Conv2d(6, 16, 5)
+    #     self.pool = nn.MaxPool2d(2, 2)
+    #     self.fc1 = nn.Linear(384, 256)
+    #     self.fc2 = nn.Linear(256, 5)
+    #     self.relu = nn.ReLU()
+    
+    # def forward(self, x):
+    #     x = self.pool(self.relu(self.conv1(x)))
+    #     x = self.pool(self.relu(self.conv2(x)))
+    #     x = torch.flatten(x, 1)
+    #     x = self.fc1(x)
+    #     x = self.relu(x)
+    #     x = self.fc2(x)
+    #     return x
 
 #######################################################################################################################################
 ####     K-FOLD CROSS VALIDATION                                                                                                  ####
