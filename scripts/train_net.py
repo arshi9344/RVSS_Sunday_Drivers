@@ -70,7 +70,8 @@ plt.show()
 example_ims, example_lbls = next(iter(trainloader))
 print(' '.join(f'{example_lbls[j]}' for j in range(len(example_lbls))))
 imshow(torchvision.utils.make_grid(example_ims))
-
+plt.savefig('training_metrics.png')
+plt.close()
 
 ########################
 ## Validation dataset ##
