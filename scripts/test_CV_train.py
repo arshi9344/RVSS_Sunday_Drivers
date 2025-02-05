@@ -17,10 +17,19 @@ from steerDS import SteerDataSet
 
 torch.manual_seed(42)
 
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+if torch.cuda.is_available():
+    print(f'Using GPU: {torch.cuda.get_device_name(0)}')
+else:
+    print('Using CPU')
+
 def reset_weights(m):
     for layer in m.children():
         if hasattr(layer, 'reset_parameters'):
             layer.reset_parameters()
+
+def is_running_in_ssh():
+    return 'SSH_CLIENT' in os.environ or 'SSH_TTY' in os.environ
 
 #######################################################################################################################################
 ####     SETTING UP THE DATASET                                                                                                    ####
@@ -49,17 +58,17 @@ class Net(nn.Module):
         super().__init__()
 
         # Convolutional layers (Feature Extraction)
-        self.conv1 = nn.Conv2d(3, 6, kernel_size=5, stride=2, padding=2)
-        self.conv2 = nn.Conv2d(6, 16, kernel_size=5, stride=2, padding=2)
-        self.conv3 = nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1)
-        self.conv4 = nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1)
-        self.conv5 = nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(3, 6, kernel_size=5)
+        self.conv2 = nn.Conv2d(6, 16, kernel_size=5)
+        self.conv3 = nn.Conv2d(16, 32, kernel_size=3)
+        self.conv4 = nn.Conv2d(32, 64, kernel_size=3)
+        self.conv5 = nn.Conv2d(64, 64, kernel_size=3)
 
         # Pooling layer (Downsampling)
-        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)  # Reduce spatial dimensions by 2x
+        self.pool = nn.MaxPool2d(kernel_size=2) #, stride=2)  # Reduce spatial dimensions by 2x
 
         # Fully Connected Layers (Decision Making)
-        self.fc1 = nn.Linear(2560, 256)  # Adjusted to match output feature map size
+        self.fc1 = nn.Linear(11904, 256)  # Adjusted to match output feature map size
         self.fc2 = nn.Linear(256, 128)  # Added extra FC layer for better decision-making
         self.fc3 = nn.Linear(128, 5)  # Output layer (5 neurons, matching your original)
         
@@ -67,32 +76,22 @@ class Net(nn.Module):
         self.relu = nn.ReLU()
 
     def forward(self, x):
-        #print("Input shape:", x.shape)
-        
         x = self.pool(self.relu(self.conv1(x)))  # Conv1 → ReLU → MaxPool
-        #print("After conv1:", x.shape)
-        
         x = self.pool(self.relu(self.conv2(x)))  # Conv2 → ReLU → MaxPool
-        #print("After conv2:", x.shape)
-        
         x = self.relu(self.conv3(x))  # Conv3 → ReLU
-        #print("After conv3:", x.shape)
-        
         x = self.relu(self.conv4(x))  # Conv4 → ReLU
-        #print("After conv4:", x.shape)
-        
         x = self.relu(self.conv5(x))  # Conv5 → ReLU
-        #print("After conv5:", x.shape)
 
         # Flatten before feeding into fully connected layers
         x = torch.flatten(x, start_dim=1)  # Flatten all dimensions except batch
-        #print("After flatten:", x.shape)
 
         # Fully Connected Layers + Activation
         x = self.relu(self.fc1(x))  # FC1 → ReLU
         x = self.relu(self.fc2(x))  # FC2 → ReLU
         x = self.fc3(x)  # Output layer (Linear activation for regression)
-        return x
+
+        output = F.log_softmax(x, dim=1)
+        return output
 
     # def __init__(self):
     #     super().__init__()
@@ -145,23 +144,30 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
     # Data setup
     train_subsampler = SubsetRandomSampler(train_ids)
     val_subsampler = SubsetRandomSampler(val_ids)
-    trainloader = DataLoader(dataset, batch_size=8, sampler=train_subsampler)
+    trainloader = DataLoader(dataset, batch_size=64, sampler=train_subsampler)
     valloader = DataLoader(dataset, batch_size=1, sampler=val_subsampler)
     
     # Model setup
-    net = Net()
+    net = Net().to(device)
     net.apply(reset_weights)
-    optimizer = torch.optim.Adam(net.parameters(), lr=1e-4)
-
+    initial_lr = 1e-4
+    optimizer = torch.optim.Adam(net.parameters(), lr=initial_lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)
+    # print(f'TEST2') # Debugging
     # Training loop
     for epoch in range(num_epochs):
         net.train()  # Set to training mode
         epoch_loss = 0.0
         correct = 0
         total = 0
+
+        # if epoch > 10:  # increase learning rate after 10 epochs
+        #     for g in optimizer.param_groups:
+        #         g['lr'] = 1e-3
+        
         for i, data in enumerate(trainloader, 0):
             # Training step
-            inputs, labels = data
+            inputs, labels = data[0].to(device), data[1].to(device)
             optimizer.zero_grad()
             outputs = net(inputs)
             loss = loss_function(outputs, labels)
@@ -181,7 +187,7 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
         val_loss = 0
         with torch.no_grad():
             for data in valloader:
-                images, labels = data
+                images, labels = data[0].to(device), data[1].to(device)
                 outputs = net(images)
                 _, predictions = torch.max(outputs, 1)
                 loss = loss_function(outputs, labels)
@@ -201,6 +207,9 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
         accs[f'train_fold_{fold}'].append(100.0 * correct / total)
         losses[f'val_fold_{fold}'].append(val_loss/len(valloader))
         accs[f'val_fold_{fold}'].append(fold_accuracy)
+
+        scheduler.step(val_loss)
+        print(f'Current LR: {optimizer.param_groups[0]["lr"]}')
 
         print(f'Epoch {epoch + 1} - Training loss: {epoch_loss/len(trainloader):.4f}, '
               f'Validation accuracy: {fold_accuracy:.2f}%')
@@ -223,7 +232,7 @@ total_pred = {classname: 0 for classname in class_labels}
 
 with torch.no_grad():
     for data in valloader:
-            images, labels = data
+            images, labels = data[0].to(device), data[1].to(device)
             outputs = net(images)
             _, predictions = torch.max(outputs, 1)
             total += labels.size(0)
@@ -237,10 +246,10 @@ with torch.no_grad():
 
     print(f'Accuracy of the network on the {total} validation images: {100 * correct // total} %')
 
-    cm = metrics.confusion_matrix(actual, predicted, normalize='true')
-    disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_labels)
-    disp.plot()
-    plt.show()
+    #cm = metrics.confusion_matrix(actual, predicted, normalize='true')
+    #disp = metrics.ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=class_labels)
+    #disp.plot()
+    #plt.show()
 
     # for classname, correct_count in correct_pred.items():
     #     accuracy = 100 * float(correct_count) / total_pred[classname]
@@ -272,8 +281,12 @@ for fold in range(k_folds):
     plt.legend()
     plt.title(f'Accuracy over Epochs - Fold {fold}')
 
-plt.tight_layout()
-plt.show()
+if is_running_in_ssh():
+    plt.savefig('training_metrics.png')
+    print("Plots saved as training_metrics.png")
+    plt.close()
+else:
+    plt.show()
 
 print('--------------------------------')
 print(f'K-FOLD CROSS VALIDATION RESULTS FOR {k_folds} FOLDS')
