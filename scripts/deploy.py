@@ -12,23 +12,32 @@ import argparse
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
-script_path = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(os.path.abspath(os.path.join(script_path, "../PenguinPi-robot/software/python/client/")))
-from pibot_client import PiBot
+from robot_comms import RobotController, get_bot
 
+script_path = os.path.dirname(os.path.realpath(__file__))
 
 parser = argparse.ArgumentParser(description='PiBot client')
 parser.add_argument('--ip', type=str, default='localhost', help='IP address of PiBot')
+parser.add_argument('--test', action='store_true', default=False, help='Run in test mode')
+parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 args = parser.parse_args()
 
-bot = PiBot(ip=args.ip)
+# Initialize robot using robot_comms
+bot = get_bot(test_mode=args.test, ip=args.ip, debug=args.debug)
+robot = RobotController(bot, debug=args.debug)
+robot.start()
 
-# stop the robot 
-bot.setVelocity(0, 0)
+# Stop the robot
+robot.queue_command(0, 0)
 
 #INITIALISE NETWORK HERE
+IMAGE_SIZE = (320, 240)
+BASE_SPEED = 40
+TURN_SPEED = 40
 
 #LOAD NETWORK WEIGHTS HERE
+model = torch.load('best_model.pth')
+model.eval()
 
 #countdown before beginning
 print("Get ready...")
@@ -43,27 +52,41 @@ print("GO!")
 
 try:
     angle = 0
+    is_stopped = bool(False)
+    speeds = (0, 0)
+    command_interval = 1.0 / 20  # 20Hz command rate
+
     while True:
+        current_time = time.time()
         # get an image from the the robot
-        im = bot.getImage()
+        im = robot.image_queue.put(angle, *speeds, is_stopped)
+        if im is None:
+            continue
 
-        #TO DO: apply any necessary image transforms
-
-        #TO DO: pass image through network get a prediction
-
-        #TO DO: convert prediction into a meaningful steering angle
+        # Process image for model
+        im_tensor = transforms.ToTensor()(im).unsqueeze(0)
+        
+        # Get model prediction
+        with torch.no_grad():
+            output_tensor = model(im_tensor)
+            speeds = (output_tensor[0].item(), output_tensor[0].item())  # Assuming model outputs steering angle
 
         #TO DO: check for stop signs?
         
-        angle = 0
+        # Queue commands at fixed rate
+        if current_time - last_command_time >= command_interval:
+            if speeds != last_speeds:
+                robot.queue_command(*speeds)
+                last_speeds = speeds
+            last_command_time = current_time
 
-        Kd = 20 #base wheel speeds, increase to go faster, decrease to go slower
-        Ka = 20 #how fast to turn when given an angle
-        left  = int(Kd + Ka*angle)
-        right = int(Kd - Ka*angle)
-            
-        bot.setVelocity(left, right)
             
         
-except KeyboardInterrupt:    
-    bot.setVelocity(0, 0)
+except KeyboardInterrupt:
+    robot.queue_command(0, 0)
+    robot.stop()
+finally:
+    robot.queue_command(0, 0)
+    robot.stop()
+    if args.debug:
+        print("[DEBUG] Shutting down")

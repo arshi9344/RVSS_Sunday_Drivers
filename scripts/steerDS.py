@@ -5,6 +5,7 @@ from torch.utils.data import Dataset
 import cv2
 from glob import glob
 from os import path
+import torch
 
 class SteerDataSet(Dataset):
     
@@ -14,11 +15,6 @@ class SteerDataSet(Dataset):
         self.img_ext = img_ext        
         self.filenames = glob(path.join(self.root_folder,"*" + self.img_ext))            
         self.totensor = transforms.ToTensor()
-        self.class_labels = ['sharp left',
-                            'left',
-                            'straight',
-                            'right',
-                            'sharp right']
         
     def __len__(self):        
         return len(self.filenames)
@@ -27,23 +23,21 @@ class SteerDataSet(Dataset):
         f = self.filenames[idx]        
         img = cv2.imread(f)[120:, :, :]
         
-        if self.transform == None:
+        if self.transform is None:
             img = self.totensor(img)
         else:
             img = self.transform(img)   
         
-        steering = f.split("/")[-1].split(self.img_ext)[0][6:]
-        steering = float(steering)       
-        # create steer classes
-        if steering <= -0.5:
-            steering_cls = 0
-        elif steering < 0:
-            steering_cls = 1
-        elif steering == 0:
-            steering_cls = 2
-        elif steering < 0.5:
-            steering_cls = 3
-        else:
-            steering_cls = 4 
-                      
-        return img, steering_cls
+        # Parse filename for wheel speeds
+        filename = path.basename(f)
+        parts = filename.split('_')
+        speeds = torch.tensor([
+            float(parts[-2]),
+            float(parts[-1].split('.jpg')[0])
+        ])
+        
+        # Normalize to [0,1] using min-max normalization
+        speeds = (speeds) / (60.0)  # Given speed range 0-60
+        speeds = torch.clamp(speeds, 0, 1)
+            
+        return img, speeds

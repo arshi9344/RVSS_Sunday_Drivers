@@ -1,90 +1,69 @@
 #!/usr/bin/env python
-import sys
 import os
-import cv2
 import pygame
 import argparse
-from datetime import datetime
 import threading
-from queue import Queue
-import numpy as np
 import time
-import random
+from datetime import datetime
+from queue import Queue, Empty
+from robot_comms import RobotController, get_bot
 
 os.environ['SDL_AUDIODRIVER'] = 'dummy'
 # os.environ['SDL_VIDEODRIVER'] = 'dummy'  # Comment this out
-
 script_path = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(os.path.abspath(os.path.join(script_path, "../PenguinPi-robot/software/python/client/")))
-
-# Import PiBot conditionally 
-try:
-    from pibot_client import PiBot
-except ImportError:
-    print("Warning: PiBot client not found, dummy bot will be used")
-    PiBot = None
 
 # Parse arguments
 parser = argparse.ArgumentParser(description='PiBot client')
-parser.add_argument('--ip', type=str, default='localhost', help='IP address of PiBot')
+parser.add_argument('--ip', type=str, default='192.168.1.100', 
+                   help='IP address of PiBot (default: 192.168.1.100)')
 parser.add_argument('--im_num', type=int, default=0)
 parser.add_argument('--folder', type=str, default='train')
 parser.add_argument('--collect', action='store_true', help='Enable data collection')
-parser.add_argument('--test', action='store_true', help='Run in test mode without robot')
+parser.add_argument('--test', action='store_true', default=False, help='Run in test mode without robot')
+parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 args = parser.parse_args()
 
-# Constants
-MAX_ANGLE = 0.5
 
+
+# Constants
+FPS = 60  # Display update rate
+COMMAND_RATE = 20  # Match robot_comms.py rate
+MAX_ANGLE = 0.5
 BASE_SPEED = 40
 TURN_SPEED = 40
-FPS = 30
-
-KEY_REPEAT_DELAY = 100  # ms before key repeat
-KEY_REPEAT_INTERVAL = 50  # ms between repeats
-RETURN_RATE = 0.08  # Rate of return to center
+RETURN_RATE = 0.08
 STEERING_RATE = 0.05
+MAX_BOOST_SPEED = 60
+BOOST_RATE = 0.2
+ANGLE_THRESHOLD = 0.1
 
-MAX_BOOST_SPEED = 80
-BOOST_RATE = 0.2  # Speed increase per frame
+# Thread synchronization
+stop_event = threading.Event()
 
-CONTROL_FPS = 100  # Main and control loop rate
-CAPTURE_FPS = 30   # Image capture rate
+def handle_input(angle, is_stopped, current_speed=BASE_SPEED):
+    """Process input and return updated control state"""
+    keys = pygame.key.get_pressed()
+    left = right = current_speed
+    
+    # Check quit/space events (these can't be missed)
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT or (
+            event.type == pygame.KEYDOWN and 
+            event.key == pygame.K_q):
+            return True, angle, is_stopped, current_speed, (0, 0)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+            is_stopped = not is_stopped
+            return False, angle, is_stopped, current_speed, (0, 0)
 
-command_queue = Queue()
-image_queue = Queue()
-
-def handle_input(angle, is_stopped, current_speed):
-    try:
-        events = pygame.event.get()
-        keys = pygame.key.get_pressed()
-        
-        # Process events
-        for event in events:
-            if event.type == pygame.QUIT or (
-                event.type == pygame.KEYDOWN and 
-                event.key == pygame.K_q):
-                return True, angle, is_stopped, current_speed
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
-                is_stopped = not is_stopped
-                if is_stopped:
-                    # Clear queue and send stop
-                    while not command_queue.empty():
-                        command_queue.get_nowait()
-                    command_queue.put((0, 0))
-        
-        # Handle boost
+    # Process continuous inputs
+    if not is_stopped:
+        # Speed control
         if keys[pygame.K_UP]:
             current_speed = min(current_speed + BOOST_RATE, MAX_BOOST_SPEED)
         else:
             current_speed = max(current_speed - BOOST_RATE, BASE_SPEED)
-        
-        # Clear queue before new steering command
-        if not is_stopped and (keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]):
-            while not command_queue.empty():
-                command_queue.get_nowait()
-        
-        # Update steering
+            
+        # Steering control
         if keys[pygame.K_LEFT]:
             angle = max(angle - STEERING_RATE, -MAX_ANGLE)
         elif keys[pygame.K_RIGHT]:
@@ -96,11 +75,11 @@ def handle_input(angle, is_stopped, current_speed):
             elif angle < 0:
                 angle = min(0, angle + RETURN_RATE)
                 
-        return False, angle, is_stopped, current_speed
+        # Calculate motor speeds
+        left = round(current_speed + TURN_SPEED * angle)
+        right = round(current_speed - TURN_SPEED * angle)
         
-    except Exception as e:
-        print(f"Error in handle_input: {str(e)}")
-        return False, angle, is_stopped, current_speed
+    return False, angle, is_stopped, current_speed, (left, right)
 
 def draw_controls(screen, angle, is_stopped, keys):
     """Draw control indicators"""
@@ -123,135 +102,115 @@ def draw_controls(screen, angle, is_stopped, keys):
     indicator_x = max(0, min(310, 160 + (angle * 320)))
     pygame.draw.rect(screen, (255, 255, 255), (indicator_x, 120, 10, 10))
 
-def draw_debug_info(screen, font, clock):
-    """Draw minimal debug info"""
-    fps = clock.get_fps()
-    text = font.render(f"FPS: {fps:.1f}", True, (255, 255, 255))
-    screen.blit(text, (10, 10))
-
-def robot_control_thread(bot):
-    """Handle robot commands in separate thread"""
-    while True:
-        try:
-            while not command_queue.empty():
-                command = command_queue.get_nowait()
-                if command is None:
-                    return
-                left, right = command
-                bot.setVelocity(left, right)
-        except Queue.Empty:
-            pass
-        time.sleep(1/CONTROL_FPS)
-
-def image_capture_thread(bot, save_dir, im_num):
-    """Handle image capture in separate thread"""
-    local_im_num = im_num
-    last_capture = time.time()
+def draw_debug_info(screen, font, clock, left=None, right=None):
+    """Draw FPS and wheel speeds"""
+    y = 10
     
-    while True:
-        if time.time() - last_capture >= 1/CAPTURE_FPS:
-            command = image_queue.get()
-            if command is None:
-                break
-                
-            angle, left, right = command
-            img = bot.getImage()
-            if img is not None:
-                image_name = f"{str(local_im_num).zfill(6)}_{angle:.2f}_{left}_{right}.jpg"
-                cv2.imwrite(os.path.join(save_dir, image_name), img)
-                local_im_num += 1
-                last_capture = time.time()
-        time.sleep(0.001)  # Small sleep to prevent busy waiting
+    # Draw FPS
+    fps = clock.get_fps()
+    fps_text = font.render(f"FPS: {fps:.1f}", True, (255, 255, 255))
+    screen.blit(fps_text, (10, y))
+    
+    # Draw wheel speeds if available
+    if left is not None and right is not None:
+        y += 20
+        speeds_text = font.render(f"L: {left} R: {right}", True, (255, 255, 255))
+        screen.blit(speeds_text, (10, y))
 
-class DummyBot:
-    """Mock robot for testing"""
-    def __init__(self, ip=None):
-        self.left = 0
-        self.right = 0
-        self.min_latency = 0.01  # 10ms minimum
-        self.max_latency = 0.05  # 50ms maximum
-        
-    def setVelocity(self, left, right):
-        # Simulate network latency
-        time.sleep(random.uniform(self.min_latency, self.max_latency))
-        self.left = left
-        self.right = right
-        
-    def getImage(self):
-        # Return test pattern instead of black image
-        img = np.zeros((240, 320, 3), dtype=np.uint8)
-        cv2.putText(img, "TEST MODE", (80, 120), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-        return img
+def debug_print(msg, debug=False):
+    if debug:
+        print(f"[DEBUG] {msg}")
 
-def get_bot(test_mode=False, ip='192.168.1.179'):
-    """Get real or dummy bot based on mode"""
-    if test_mode:
-        return DummyBot()
-    elif PiBot is not None:
-        return PiBot(ip)
-    return DummyBot()  # Fallback if PiBot unavailable
+def command_sender(robot, debug=False):
+    """Thread to handle sending commands at fixed rate"""
+    interval = 10 #1.0 / COMMAND_RATE
+    last_time = time.time()
+    
+    while not stop_event.is_set():
+        try:
+            if time.time() - last_time >= interval:
+                try:
+                    command = robot.command_queue.get_nowait()
+                    robot.setVelocity(*command)
+                    debug_print(f"Sent command: {command}", debug)
+                except Empty:
+                    pass
+                last_time = time.time()
+            time.sleep(0.001)  # Prevent CPU spinning
+        except Exception as e:
+            debug_print(f"Command sender error: {e}", debug)
+
+# Verify test mode setting
+debug_print(f"Args parsed: {vars(args)}", args.debug)
 
 def main():
     pygame.init()
     clock = pygame.time.Clock()
     screen = pygame.display.set_mode((320, 240))
     font = pygame.font.Font(None, 24)
-    bot = get_bot(args.test, args.ip)
-
-    # Initialize threads for both real and test modes
-    control_thread = threading.Thread(target=robot_control_thread, args=(bot,), daemon=True)
-    control_thread.start()
-
-    if args.collect:
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        save_dir = os.path.join(script_path, '..', 'data', args.folder, timestamp)
-        os.makedirs(save_dir, exist_ok=True)
-        image_thread = threading.Thread(target=image_capture_thread, 
-                                     args=(bot, save_dir, args.im_num),
-                                     daemon=True)
-        image_thread.start()
-    
-    angle = 0
-    is_stopped = False
-    current_speed = BASE_SPEED
     
     try:
+        # Verify args before passing
+        debug_print(f"Initializing with test={args.test}, ip={args.ip}", args.debug)
+        bot = get_bot(test_mode=args.test, ip=args.ip)  # Use explicit keyword args
+        robot = RobotController(bot, debug=args.debug)
+        
+        if args.collect:
+            save_dir = os.path.join(script_path, '..', 'data', args.folder,
+                                  datetime.now().strftime('%Y%m%d_%H%M%S'))
+            os.makedirs(save_dir, exist_ok=True)
+            robot.start(save_dir, args.im_num)
+        else:
+            robot.start()
+        angle = 0
+        last_angle = 0
+        is_stopped = False
+        current_speed = BASE_SPEED
+        should_quit = False
+        last_speeds = (0, 0)
+        last_stop_state = False
+
         while True:
-            should_quit, angle, is_stopped, current_speed = handle_input(angle, is_stopped, current_speed)
+            # Get latest state
+            should_quit, angle, is_stopped, current_speed, speeds = \
+                handle_input(angle, is_stopped, current_speed)
+
             if should_quit:
-                if not args.test:
-                    command_queue.put(None)  # Signal threads to stop
-                    if args.collect:
-                        image_queue.put(None)
-                pygame.quit()
-                return
+                robot.queue_command(0, 0)
+                robot.stop()
+                break
 
-            if not args.test and not is_stopped:
-                # Clear queue before adding new command
-                while not command_queue.empty():
-                    try:
-                        command_queue.get_nowait()
-                    except Queue.Empty:
-                        break
-                        
-                left = int(current_speed + TURN_SPEED * angle)
-                right = int(current_speed - TURN_SPEED * angle)
-                command_queue.put((left, right))
-                if args.collect:
-                    image_queue.put((angle, left, right))  # Send tuple with all values
+            # Handle stop state changes only
+            if is_stopped != last_stop_state:
+                robot.queue_command(0, 0)
+                last_speeds = (0, 0)
+                last_stop_state = is_stopped
+                if args.debug:
+                    debug_print(f"Stop state changed: {is_stopped}")
 
+            # Only process movement commands when not stopped
+            if not is_stopped:
+                if speeds != last_speeds:
+                    robot.queue_command(*speeds)
+                    last_speeds = speeds
+            
+            # Update display
             screen.fill((0, 0, 0))
             draw_controls(screen, angle, is_stopped, pygame.key.get_pressed())
-            draw_debug_info(screen, font, clock)
+            draw_debug_info(screen, font, clock, *speeds)
             pygame.display.flip()
-            clock.tick(CONTROL_FPS)
+            clock.tick(FPS)
+            print(*speeds)
+
+            if args.collect:
+                robot.image_queue.put((angle, *speeds, is_stopped))
 
     except KeyboardInterrupt:
-        if not args.test:
-            command_queue.put(None)
-            if args.collect:
-                image_queue.put(None)
+        debug_print("Keyboard interrupt detected", args.debug)
+    finally:
+        if 'robot' in locals():
+            robot.queue_command(0, 0)  # Ensure motors stop
+            robot.stop()  # Ensure threads stop
         pygame.quit()
 
 if __name__ == "__main__":
