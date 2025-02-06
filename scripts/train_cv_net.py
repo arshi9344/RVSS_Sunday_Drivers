@@ -87,7 +87,7 @@ print(f"Total dataset contains {len(dataset)} images")
 # print(f"Sample speeds: Left={sample_speeds[0]}, Right={sample_speeds[1]}")
 # print(f"Dataset size: {len(dataset)} images")
 
-trainloader = DataLoader(
+trainloader_plot = DataLoader(
     dataset, 
     batch_size=32,
     shuffle=True,
@@ -104,7 +104,7 @@ def denormalize(tensor):
     return tensor * std + mean
 
 # Update visualization code
-example_ims, example_lbls = next(iter(trainloader))
+example_ims, example_lbls = next(iter(trainloader_plot))
 plt.figure(figsize=(15, 5))
 grid = torchvision.utils.make_grid(denormalize(example_ims))
 plt.imshow(grid.permute(1, 2, 0).clamp(0, 1))
@@ -176,13 +176,6 @@ samples_weight = torch.FloatTensor(samples_weight)
 # Create weighted sampler
 sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
 
-# Update data loaders
-trainloader = DataLoader(
-    dataset,
-    batch_size=32,
-    sampler=sampler,
-    num_workers=2
-)
 
 #######################################################################################################################################
 ####     INITIALISE OUR NETWORK                                                                                                    ####
@@ -310,7 +303,8 @@ best_loss = float('inf')
 ####     TRAINING                                                                                                                  ####
 #######################################################################################################################################
 
-results = {}  # Initialize results dictionary
+# Initialize results dictionary with both MSE and MAE
+results = {f'fold_{i}': {'mse': 0, 'mae': 0} for i in range(k_folds)}
 
 for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
     print(f'FOLD {fold}')
@@ -337,21 +331,33 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
         total = 0
         mae = 0.0
         
-        # In the training loop
+        # Inside training loop
+        epoch_mae = 0.0
+        epoch_loss = 0.0
+        total = 0
+
         for i, data in enumerate(trainloader, 0):
             inputs, speeds = data[0].to(device), data[1].to(device)
-            speeds = speeds.float()  # Shape: [batch_size, 2]
+            speeds = speeds.float()
             optimizer.zero_grad()
-            outputs = net(inputs)  # Shape: [batch_size, 2]
+            outputs = net(inputs)
             loss = loss_function(outputs, speeds)
             loss.backward()
             optimizer.step()
             
-            # Update metrics
+            # Accumulate batch metrics
             epoch_loss += loss.item()
+            batch_mae = F.l1_loss(outputs, speeds, reduction='sum').item()
+            epoch_mae += batch_mae
             total += speeds.size(0)
-            error = torch.abs(outputs - speeds).mean()
-            mae += error.item()
+
+        # Calculate average training metrics
+        train_mse = epoch_loss / len(trainloader)
+        train_mae = epoch_mae / total
+
+        # Record training metrics
+        losses[f'train_fold_{fold}'].append(train_mse)
+        accs[f'train_fold_{fold}'].append(train_mae)
 
         # Validation phase
         net.eval()  # Set to evaluation mode
@@ -405,7 +411,10 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
               f'Validation MAE: {val_mae:.4f}')
 
     # Store fold results
-    results[fold] = val_mse
+    results[fold] = {
+        'mse': val_mse,
+        'mae': val_mae
+    }
 
 #######################################################################################################################################
 ####     PERFORMANCE EVALUATION                                                                                                    ####
@@ -474,7 +483,8 @@ else:
 
 print('--------------------------------')
 print(f'K-FOLD CROSS VALIDATION RESULTS FOR {k_folds} FOLDS')
-for key, value in results.items():
-    print(f'Fold {key}: MSE={value:.4f}')
-print(f'Average MSE: {sum(results.values()) / len(results):.4f}')
+for fold, metrics in results.items():
+    print(f'Fold {fold}: MSE={metrics["mse"]:.4f}, MAE={metrics["mae"]:.4f}')
+print(f'Average MSE: {sum(m["mse"] for m in results.values()) / len(results):.4f}')
+print(f'Average MAE: {sum(m["mae"] for m in results.values()) / len(results):.4f}')
 print(f'Best model from fold {best_fold} with MSE {best_loss:.4f}')
