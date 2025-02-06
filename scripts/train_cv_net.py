@@ -1,6 +1,6 @@
 import torch
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, SubsetRandomSampler, ConcatDataset
+from torch.utils.data import DataLoader, SubsetRandomSampler, ConcatDataset, WeightedRandomSampler
 import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
@@ -97,11 +97,18 @@ trainloader = DataLoader(
 # Extract all labels
 all_y = [label for _, label in dataset]
 
-# Visualize example images
+# Add denormalization function
+def denormalize(tensor):
+    mean = torch.tensor([0.5, 0.5, 0.5]).view(3, 1, 1)
+    std = torch.tensor([0.5, 0.5, 0.5]).view(3, 1, 1)
+    return tensor * std + mean
+
+# Update visualization code
 example_ims, example_lbls = next(iter(trainloader))
-print(' '.join(f'{example_lbls[j]}' for j in range(len(example_lbls))))
 plt.figure(figsize=(15, 5))
-plt.imshow(torchvision.utils.make_grid(example_ims).permute(1, 2, 0))
+grid = torchvision.utils.make_grid(denormalize(example_ims))
+plt.imshow(grid.permute(1, 2, 0).clamp(0, 1))
+plt.axis('off')
 plt.savefig('training_metrics.png')
 plt.show()
 
@@ -113,30 +120,69 @@ for i in range(len(dataset)):
     left_speeds.append(speeds[0].item())
     right_speeds.append(speeds[1].item())
 
-# Create figure with two subplots
-plt.figure(figsize=(12, 5))
+# # Create figure with two subplots
+# plt.figure(figsize=(12, 5))
 
-# Left speeds distribution
-plt.subplot(1, 2, 1)
-plt.hist(left_speeds, bins=20, color='blue', alpha=0.7)
-plt.xlabel('Left Wheel Speed')
-plt.ylabel('Count')
-plt.title('Left Wheel Speed Distribution')
+# # Left speeds distribution
+# plt.subplot(1, 2, 1)
+# plt.hist(left_speeds, bins=20, color='blue', alpha=0.7)
+# plt.xlabel('Left Wheel Speed')
+# plt.ylabel('Count')
+# plt.title('Left Wheel Speed Distribution')
 
-# Right speeds distribution  
-plt.subplot(1, 2, 2)
-plt.hist(right_speeds, bins=20, color='red', alpha=0.7)
-plt.xlabel('Right Wheel Speed')
-plt.ylabel('Count')
-plt.title('Right Wheel Speed Distribution')
+# # Right speeds distribution  
+# plt.subplot(1, 2, 2)
+# plt.hist(right_speeds, bins=20, color='red', alpha=0.7)
+# plt.xlabel('Right Wheel Speed')
+# plt.ylabel('Count')
+# plt.title('Right Wheel Speed Distribution')
 
-plt.tight_layout()
-plt.savefig('speed_distributions.png')
-#plt.show()
+# plt.tight_layout()
+# plt.savefig('speed_distributions.png')
+# plt.show()
 
 print(f"Speed ranges:")
 print(f"Left: {min(left_speeds):.1f} to {max(left_speeds):.1f}")
 print(f"Right: {min(right_speeds):.1f} to {max(right_speeds):.1f}")
+
+# Calculate histogram with smoothing
+left_counts, left_bins = np.histogram(left_speeds, bins=20, range=(min(left_speeds), max(left_speeds)))
+right_counts, right_bins = np.histogram(right_speeds, bins=20, range=(min(right_speeds), max(right_speeds)))
+
+# Add smoothing factor to avoid zero weights
+epsilon = 1e-7
+left_counts = left_counts + epsilon
+right_counts = right_counts + epsilon
+
+# Calculate weights
+left_weights = 1.0 / left_counts
+right_weights = 1.0 / right_counts
+
+# Normalize weights
+left_weights = left_weights / np.sum(left_weights)
+right_weights = right_weights / np.sum(right_weights)
+
+# Assign weights with bounds checking
+samples_weight = []
+for i in range(len(dataset)):
+    _, speeds = dataset[i]
+    left_idx = min(max(np.digitize(speeds[0].item(), left_bins) - 1, 0), len(left_weights) - 1)
+    right_idx = min(max(np.digitize(speeds[1].item(), right_bins) - 1, 0), len(right_weights) - 1)
+    weight = max((left_weights[left_idx] + right_weights[right_idx]) / 2, epsilon)
+    samples_weight.append(weight)
+
+samples_weight = torch.FloatTensor(samples_weight)
+
+# Create weighted sampler
+sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
+
+# Update data loaders
+trainloader = DataLoader(
+    dataset,
+    batch_size=32,
+    sampler=sampler,
+    num_workers=2
+)
 
 #######################################################################################################################################
 ####     INITIALISE OUR NETWORK                                                                                                    ####
@@ -147,9 +193,9 @@ class Net(nn.Module):
         super().__init__()
         
         # 1) Convolution + Pooling block
-        self.conv1 = nn.Conv2d(in_channels=3, out_channels=16, kernel_size=3)
-        self.conv2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3)
-        self.conv3 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
+        self.conv1 = nn.Conv2d(3, 16, 3)
+        self.conv2 = nn.Conv2d(16, 32, 3)
+        self.conv3 = nn.Conv2d(32, 64, 3)
         
         # 2) Pooling layer
         self.pool = nn.MaxPool2d(kernel_size=2)
@@ -273,8 +319,8 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
     # Data setup
     train_subsampler = SubsetRandomSampler(train_ids)
     val_subsampler = SubsetRandomSampler(val_ids)
-    trainloader = DataLoader(dataset, batch_size=64, sampler=train_subsampler)
-    valloader = DataLoader(dataset, batch_size=1, sampler=val_subsampler)
+    trainloader = DataLoader(dataset, batch_size=64, sampler=sampler)
+    valloader = DataLoader(dataset, batch_size=1, sampler=sampler)
     
     # Model setup
     net = Net().to(device)
@@ -389,34 +435,39 @@ with torch.no_grad():
 ####     PLOTTING METRICS                                                                                                          ####
 #######################################################################################################################################
 
-# Create a figure with k_folds rows and 2 columns
-plt.figure(figsize=(15, 5*k_folds))
+# After all folds complete, create plots
+plt.figure(figsize=(12, 8))
 
-# MSE Loss subplot
-plt.subplot(k_folds, 2, 2*fold + 1)
-plt.plot(losses[f'train_fold_{fold}'], '--', label=f'Train MSE Fold {fold}')
-plt.plot(losses[f'val_fold_{fold}'], label=f'Val MSE Fold {fold}')
+# Plot MSE for all folds
+plt.subplot(2, 1, 1)
+for fold in range(k_folds):
+    plt.plot(losses[f'train_fold_{fold}'], '--', label=f'Train MSE Fold {fold}')
+    plt.plot(losses[f'val_fold_{fold}'], label=f'Val MSE Fold {fold}')
 plt.xlabel('Epoch')
 plt.ylabel('Mean Squared Error')
 plt.legend()
 plt.grid(True)
-plt.title('MSE Loss Across Folds')
+plt.title('MSE Loss Across All Folds')
 
-# MAE subplot  
-plt.subplot(k_folds, 2, 2*fold + 2)
-plt.plot(accs[f'train_fold_{fold}'], '--', label=f'Train MAE Fold {fold}')
-plt.plot(accs[f'val_fold_{fold}'], label=f'Val MAE Fold {fold}')
+# Plot MAE for all folds
+plt.subplot(2, 1, 2)
+for fold in range(k_folds):
+    plt.plot(accs[f'train_fold_{fold}'], '--', label=f'Train MAE Fold {fold}')
+    plt.plot(accs[f'val_fold_{fold}'], label=f'Val MAE Fold {fold}')
 plt.xlabel('Epoch')
 plt.ylabel('Mean Absolute Error')
 plt.legend()
 plt.grid(True)
-plt.title('MAE Across Folds')
+plt.title('MAE Across All Folds')
 
 plt.tight_layout()
+plt.show()
+plt.savefig('training_stats.png')
+plt.close()
 
 if is_running_in_ssh():
-    plt.savefig('training_metrics.png')
-    print("Plots saved as training_metrics.png")
+    plt.savefig('training_stats.png')
+    print("Plots saved as training_stats.png")
     plt.close()
 else:
     plt.show()

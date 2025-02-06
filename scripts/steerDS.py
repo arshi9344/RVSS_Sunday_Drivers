@@ -15,6 +15,7 @@ class SteerDataSet(Dataset):
         self.img_ext = img_ext        
         self.filenames = glob(path.join(self.root_folder,"*" + self.img_ext))            
         self.totensor = transforms.ToTensor()
+        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         
     def __len__(self):        
         return len(self.filenames)
@@ -22,6 +23,11 @@ class SteerDataSet(Dataset):
     def __getitem__(self,idx):
         f = self.filenames[idx]        
         img = cv2.imread(f)[120:, :, :]
+        
+        # Apply CLAHE to each channel
+        img_lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        img_lab[:,:,0] = self.clahe.apply(img_lab[:,:,0])
+        img = cv2.cvtColor(img_lab, cv2.COLOR_LAB2BGR)
         
         if self.transform is None:
             img = self.totensor(img)
