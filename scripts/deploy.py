@@ -55,7 +55,7 @@ def detect_stop_sign(image, min_area=200, max_area=500):
         print("[DEBUG] Blob detection returned", len(blobs), "blob(s).")
         for b in blobs:
             print("[DEBUG] Blob area:", b.area)
-            if b.area > sign_area_min and b.area < sign_area_max:
+            if b.area > min_area and b.area < max_area:
                 print("[DEBUG] Blob area exceeds threshold, stop sign detected.")
                 return True
         print("[DEBUG] No blob exceeded the sign_area_min threshold.")
@@ -122,7 +122,9 @@ class Net(nn.Module):
     
 #LOAD NETWORK WEIGHTS HERE
 model = Net()
-model.load_state_dict(torch.load('best_model_10.pth', map_location=torch.device('cpu'),weights_only=True))
+# model_path = os.path.join("ADAM_Models", "best_model_10.pth")
+model_path = os.path.join("best_model_10.pth")
+model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'),weights_only=True))
 model.eval()
 
 # Determine device
@@ -168,11 +170,11 @@ try:
         if args.debug:
             print(f"[DEBUG] Cropped image shape: {im.shape}")
         
-        if detect_stop_sign(im):
-            print("STOP SIGN DETECTED!")
-            # Immediately stop the robot if stop sign detected
-            robot.queue_command(0, 0)
-            time.sleep(2)
+        # if detect_stop_sign(im):
+        #     print("STOP SIGN DETECTED!")
+        #     # Immediately stop the robot if stop sign detected
+        #     robot.queue_command(0, 0)
+        #     time.sleep(2)
         else:
             if args.debug:
                 print("[DEBUG] No stop sign detected.")
