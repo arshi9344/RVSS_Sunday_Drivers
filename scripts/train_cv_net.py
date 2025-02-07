@@ -204,7 +204,7 @@ class Net(nn.Module):
 
         # 3) Fully connected
         #    Flattened dimension after conv/pool is 1600, so fc1 in_features=1600
-        self.fc1 = nn.Linear(1600, 256)
+        self.fc1 = nn.Linear(10816, 256)
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, 2)  # final 2 outputs (e.g. left/right speeds)
 
