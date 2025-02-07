@@ -1,6 +1,6 @@
 import torch
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, SubsetRandomSampler, ConcatDataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, SubsetRandomSampler, ConcatDataset, WeightedRandomSampler, Dataset
 import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
@@ -12,9 +12,7 @@ from sklearn.model_selection import KFold
 import random
 
 import matplotlib.pyplot as plt
-
 from steerDS import SteerDataSet
-
 from model import Net
 
 
@@ -24,7 +22,7 @@ def seed_everything(random_seed: int):
     torch.cuda.manual_seed_all(random_seed)
     random.seed(random_seed)
 
-# torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = True
 # torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of available memory
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -59,7 +57,7 @@ transform = transforms.Compose([
 ])
 
 script_path = os.path.dirname(os.path.realpath(__file__))
-datasets_path = os.path.join(script_path, '..', 'data', 'datasets_4_training')
+datasets_path = os.path.join('.', 'data', 'Datasets_4_train')
 
 # Debug directory structure
 print(f"Looking for datasets in: {datasets_path}")
@@ -98,8 +96,6 @@ if total_images == 0:
 dataset = ConcatDataset(datasets)
 print(f"Total dataset contains {len(dataset)} images")
 
-# Verify dataset before creating loader
-print(f"Dataset size: {len(dataset)}")
 sample_idx = 0
 try:
     sample = dataset[sample_idx]
@@ -118,12 +114,18 @@ trainloader_plot = DataLoader(
 # Extract all labels
 all_y = [label for _, label in dataset]
 
+def imshow(img):
+    img = img / 2 + 0.5 #unnormalize
+    npimg = img.numpy()
+    npimg = np.transpose(npimg, (1, 2, 0))
+    plt.imshow(npimg)
+    plt.show()
+
 # Update visualization code
 example_ims, example_lbls = next(iter(trainloader_plot))
 imshow(torchvision.utils.make_grid(example_ims))
 plt.axis('off')
 plt.savefig('training_validation.png')
-plt.show()
 plt.close()
 
 # Extract all speeds
@@ -139,14 +141,14 @@ plt.figure(figsize=(12, 5))
 
 # Left speeds distribution
 plt.subplot(1, 2, 1)
-plt.hist(left_speeds, bins=20, color='blue', alpha=0.7)
+plt.hist(left_speeds, bins=40, color='blue', alpha=0.7, range=(min(left_speeds), max(left_speeds)))
 plt.xlabel('Left Wheel Speed')
 plt.ylabel('Count')
 plt.title('Left Wheel Speed Distribution')
 
 # Right speeds distribution  
 plt.subplot(1, 2, 2)
-plt.hist(right_speeds, bins=20, color='red', alpha=0.7)
+plt.hist(right_speeds, bins=40, color='red', alpha=0.7, range=(min(right_speeds), max(right_speeds)))
 plt.xlabel('Right Wheel Speed')
 plt.ylabel('Count')
 plt.title('Right Wheel Speed Distribution')
@@ -156,12 +158,12 @@ plt.savefig('speed_distributions.png')
 plt.show()
 
 print(f"Speed ranges:")
-print(f"Left: {min(left_speeds):.1f} to {max(left_speeds):.1f}")
-print(f"Right: {min(right_speeds):.1f} to {max(right_speeds):.1f}")
+print(f"Left: {min(left_speeds):.2f} to {max(left_speeds):.1f}")
+print(f"Right: {min(right_speeds):.2f} to {max(right_speeds):.1f}")
 
-# Calculate histogram with smoothing
-left_counts, left_bins = np.histogram(left_speeds, bins=20, range=(min(left_speeds), max(left_speeds)))
-right_counts, right_bins = np.histogram(right_speeds, bins=20, range=(min(right_speeds), max(right_speeds)))
+# Calculate histogram with appropriate range for normalized speeds
+left_counts, left_bins = np.histogram(left_speeds, bins=20, range=(0, 1))
+right_counts, right_bins = np.histogram(right_speeds, bins=20, range=(0, 1))
 
 # Add smoothing factor to avoid zero weights
 epsilon = 1e-7
@@ -169,6 +171,8 @@ left_counts = left_counts + epsilon
 right_counts = right_counts + epsilon
 
 # Calculate weights
+# left_weights = 1.0 / np.sqrt(left_counts)
+# right_weights = 1.0 / np.sqrt(right_counts)
 left_weights = 1.0 / left_counts
 right_weights = 1.0 / right_counts
 
@@ -188,7 +192,32 @@ for i in range(len(dataset)):
 samples_weight = torch.FloatTensor(samples_weight)
 
 # Create weighted sampler
-sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
+# sampler = WeightedRandomSampler(samples_weight, len(samples_weight), replacement=True)
+
+# Before the k-fold loop, load all data to GPU
+all_images = []
+all_speeds = []
+for i in range(len(dataset)):
+    img, speed = dataset[i]
+    all_images.append(img)
+    all_speeds.append(speed)
+
+all_images = torch.stack(all_images).to(device)
+all_speeds = torch.stack(all_speeds).to(device)
+
+class InMemoryDataset(Dataset):
+    def __init__(self, images, speeds):
+        self.images = images
+        self.speeds = speeds
+    
+    def __len__(self):
+        return len(self.images)
+    
+    def __getitem__(self, idx):
+        return self.images[idx], self.speeds[idx]
+
+# Create in-memory dataset
+gpu_dataset = InMemoryDataset(all_images, all_speeds)
 
 #######################################################################################################################################
 ####     K-FOLD CROSS VALIDATION                                                                                                  ####
@@ -217,44 +246,53 @@ best_loss = float('inf')
 #######################################################################################################################################
 
 # SEEDED TRAINING. Use different seeds! cals seed
-seed = 10
-seed_everything(seed)
+seeds = [10, 42, 123, 256, 789]
+best_loss = [float('inf')] * k_folds
+initial_lr=1e-3
 
 # Initialize results dictionary with both MSE and MAE
 results = {f'fold_{i}': {'mse': 0, 'mae': 0} for i in range(k_folds)}
+
 
 for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
     print(f'FOLD {fold}')
     print('--------------------------------')
     
     # Data setup
-    train_subsampler = SubsetRandomSampler(train_ids)
-    val_subsampler = SubsetRandomSampler(val_ids)
+    train_weights = samples_weight[train_ids]
+    train_sampler = WeightedRandomSampler(train_weights, len(train_ids), replacement=True)
+
+    # Validation: use exact indices without weighting
+    val_sampler = SubsetRandomSampler(val_ids)
+    
+    # Modify your data loaders
     trainloader = DataLoader(
-        dataset, 
-        batch_size=256, 
-        sampler=sampler,
-        pin_memory=True,  # Speeds up data transfer to GPU
-        num_workers=8,   # Increased worker count
-        persistent_workers=True  # Keep workers alive between epochs
+        gpu_dataset, 
+        batch_size=512,
+        sampler=train_sampler,
+        pin_memory=False,  # Not needed as data is already on GPU
+        num_workers=0,     # Not needed as data is in memory
+        persistent_workers=False
     )
+
     valloader = DataLoader(
-        dataset, 
-        batch_size=512,    # Increased from 1 for better GPU utilization
-        sampler=sampler,
-        pin_memory=True,
-        num_workers=8,
-        persistent_workers=True
+        gpu_dataset, 
+        batch_size=1024,
+        sampler=val_sampler,
+        pin_memory=False,
+        num_workers=0,
+        persistent_workers=False
     )
     
     # Model setup
+    seed_everything(seeds[fold])
     net = Net().to(device)
     net.apply(reset_weights)
-    initial_lr = 1e-4
-    optimizer = torch.optim.Adam(net.parameters(), lr=initial_lr)
-    #optimizer = torch.optim.RMSprop(net.parameters(), lr=initial_lr)
+    
+    #optimizer = torch.optim.Adam(net.parameters(), lr=initial_lr)
+    optimizer = torch.optim.RMSprop(net.parameters(), lr=initial_lr)
     #optimizer = optim.SGD(net.parameters(), lr=initial_lr, momentum=0.9)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.2, patience=5, min_lr=1e-6)
     scaler = torch.amp.GradScaler('cuda')
     # print(f'TEST2') # Debugging
     # Training loop
@@ -304,8 +342,7 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
 
         with torch.no_grad():
             for data in valloader:
-                images, speeds = data[0].to(device), data[1].to(device)
-                speeds = speeds.float().to(device)
+                images, speeds = data[0].to(device), data[1].float().to(device)
                 outputs = net(images)
                 val_loss += loss_function(outputs, speeds).item()
                 val_mae += F.l1_loss(outputs, speeds, reduction='sum').item()
@@ -334,18 +371,53 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
         accs[f'val_fold_{fold}'].append(val_mae.item())
 
         # Save best model based on validation MSE
-        if val_mse < best_loss:  # Change from accuracy to loss
-            best_loss = val_mse
+        if val_mse < best_loss[fold]:  # Use square brackets for list indexing
+            best_loss[fold] = val_mse
             best_fold = fold
-            torch.save(net.state_dict(), f'best_model_{seed}.pth')
+            torch.save(net.state_dict(), f'model_{fold}.pth')
 
         scheduler.step(val_loss)
         print(f'Current LR: {optimizer.param_groups[0]["lr"]}')
 
         print(f'Epoch {epoch + 1} - Training MSE: {train_mse:.4f}, '
-              f'Validation MSE: {val_mse:.4f}, '
-              f'Training MAE: {train_mae:.4f}, '
-              f'Validation MAE: {val_mae:.4f}')
+            f'Validation MSE: {val_mse:.4f}, '
+            f'Training MAE: {train_mae:.4f}, '
+            f'Validation MAE: {val_mae:.4f}')
+        
+    # After the 'for epoch in range(num_epochs):' loop finishes, plot this fold's stats.
+    train_mse_list = losses[f'train_fold_{fold}']
+    val_mse_list = losses[f'val_fold_{fold}']
+    train_mae_list = accs[f'train_fold_{fold}']
+    val_mae_list = accs[f'val_fold_{fold}']
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    # Plot MSE
+    epochs = range(1, len(train_mse_list) + 1)
+    axes[0].plot(epochs, train_mse_list, label='Train MSE', linestyle='--')
+    axes[0].plot(epochs, val_mse_list, label='Val MSE')
+    axes[0].set_xlabel('Epoch')
+    axes[0].set_ylabel('MSE Loss')
+    axes[0].set_title(f'Fold {fold} - MSE')
+    axes[0].legend()
+    axes[0].grid(True)
+    # Set upper limit to 95th percentile of data
+    axes[0].set_ylim(bottom=0, top=np.percentile( train_mse_list + val_mse_list, 95))
+
+    # Plot MAE
+    axes[1].plot(epochs, train_mae_list, label='Train MAE', linestyle='--')
+    axes[1].plot(epochs, val_mae_list, label='Val MAE')
+    axes[1].set_xlabel('Epoch')
+    axes[1].set_ylabel('MAE')
+    axes[1].set_title(f'Fold {fold} - MAE')
+    axes[1].legend()
+    axes[1].grid(True)
+    # Set upper limit to 95th percentile of data
+    axes[1].set_ylim(bottom=0, top=np.percentile(train_mae_list + val_mae_list, 95))
+
+    plt.tight_layout()
+    plt.savefig(f"Fold_{fold}_stats.png")
+    plt.show(block=False)
 
     # Store fold results
     results[fold] = {
@@ -353,18 +425,13 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
         'mae': val_mae
     }
 
+    
+
 #######################################################################################################################################
 ####     PERFORMANCE EVALUATION                                                                                                    ####
 #######################################################################################################################################
 print('Best Fold:', best_fold)
-net.load_state_dict(torch.load(f'best_model_{seed}.pth', weights_only=True))
-
-correct = 0
-total = 0
-actual = []  # Reset actual list for each fold
-predicted = []  # Reset predicted list for each fold
-correct_pred = {speed: 0 for speed in speeds}
-total_pred = {speed: 0 for speed in speeds}
+net.load_state_dict(torch.load(f'model_{fold}.pth', weights_only=True))
 
 with torch.no_grad():
     total_error = 0
@@ -441,4 +508,4 @@ for fold, metrics in results.items():
     print(f'Fold {fold}: MSE={metrics["mse"]:.4f}, MAE={metrics["mae"]:.4f}')
 print(f'Average MSE: {sum(m["mse"] for m in results.values()) / len(results):.4f}')
 print(f'Average MAE: {sum(m["mae"] for m in results.values()) / len(results):.4f}')
-print(f'Best model from fold {best_fold} with MSE {best_loss:.4f}')
+# print(f'Best model from fold {best_fold} with MSE {best_loss:.4f}')
