@@ -58,6 +58,15 @@ transform = transforms.Compose([
 script_path = os.path.dirname(os.path.realpath(__file__))
 datasets_path = os.path.join(script_path, '..', 'data', 'datasets_4_training')
 
+#Helper function for visualising images in our dataset
+def imshow(img):
+    img = img / 2 + 0.5 #unnormalize
+    npimg = img.numpy()
+    npimg = np.transpose(npimg, (1, 2, 0))
+    #rgbimg = npimg[:,:,::-1] makes the red hues blue but too scared to remove
+    plt.imshow(npimg)
+    plt.show()
+    
 # Debug directory structure
 print(f"Looking for datasets in: {datasets_path}")
 if not os.path.exists(datasets_path):
