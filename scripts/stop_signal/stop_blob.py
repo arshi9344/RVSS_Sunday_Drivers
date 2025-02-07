@@ -7,7 +7,8 @@ from machinevisiontoolbox import Image
 # STEP 1: Load & Crop
 # -------------------------------------------------
     
-cv_frame = cv2.imread('./stop_signs/000221_0.00.jpg')
+cv_frame = cv2.imread('Image_stop.jpg')
+cv2.imshow("original image", cv_frame)
 if cv_frame is None:
     raise FileNotFoundError("Could not load './stop_signs/000249_0.00.jpg'!")
 
@@ -40,7 +41,7 @@ mask_clean_cv = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
 # Convert from [0,255] to boolean for MVT
 mask_mvt = Image(mask_clean_cv.astype(bool))
-sign_area_min=2000
+sign_area_min=300
 # -------------------------------------------------
 # STEP 4: Blob Detection with MVT
 # -------------------------------------------------

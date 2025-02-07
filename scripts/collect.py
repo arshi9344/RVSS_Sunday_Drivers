@@ -150,6 +150,7 @@ def main():
     font = pygame.font.Font(None, 24)
     
     try:
+
         # Verify args before passing
         debug_print(f"Initializing with test={args.test}, ip={args.ip}", args.debug)
         bot = get_bot(test_mode=args.test, ip=args.ip)  # Use explicit keyword args
@@ -163,7 +164,6 @@ def main():
         else:
             robot.start()
         angle = 0
-        last_angle = 0
         is_stopped = False
         current_speed = BASE_SPEED
         should_quit = False
@@ -200,7 +200,7 @@ def main():
             draw_debug_info(screen, font, clock, *speeds)
             pygame.display.flip()
             clock.tick(FPS)
-            print(*speeds)
+            #print(*speeds)
 
             if args.collect:
                 robot.save_queue.put((angle, *speeds, is_stopped))

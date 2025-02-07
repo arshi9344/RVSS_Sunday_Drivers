@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 import time
-import click
-import math
 import cv2
 import os
-import sys
 import numpy as np
 import torch
 import torch.nn as nn
 import argparse
-import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from robot_comms import RobotController, get_bot
+from machinevisiontoolbox import Image  # Required for blob detection
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -23,6 +20,49 @@ parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 parser.add_argument('--debug_images', action='store_true', help='Show debug image windows')
 args = parser.parse_args()
 
+def detect_stop_sign(image, sign_area_min=200, sign_area_max=500):
+    """
+    Detect a stop sign in the given image based on red color blob detection.
+    Returns True if a blob with area greater than sign_area_min is found.
+    """
+    print("[DEBUG] Original image shape:", image.shape)
+    h, w, _ = image.shape
+    cropped = image[h//2:, :]
+    print("[DEBUG] After cropping bottom half, cropped shape:", cropped.shape)
+
+    # Convert to HSV for thresholding red
+    hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
+    print("[DEBUG] Converted cropped image to HSV.")
+    
+    lower_red = np.array([165, 50, 50])
+    upper_red = np.array([180, 255, 255])
+    mask = cv2.inRange(hsv, lower_red, upper_red)
+    print("[DEBUG] Created red threshold mask, mask shape:", mask.shape)
+    
+    # Morphological operation to clean up the mask
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    print("[DEBUG] Applied morphological opening on mask.")
+    
+    # Convert mask to boolean and use MVT for blob detection
+    mask_bool = mask_clean.astype(bool)
+    print("[DEBUG] Converted cleaned mask to boolean.")
+    
+    mvt_im = Image(mask_bool)
+    try:
+        blobs = mvt_im.blobs()
+        print("[DEBUG] Blob detection returned", len(blobs), "blob(s).")
+        for b in blobs:
+            print("[DEBUG] Blob area:", b.area)
+            if b.area > sign_area_min:
+                print("[DEBUG] Blob area exceeds threshold, stop sign detected.")
+                return True
+        print("[DEBUG] No blob exceeded the sign_area_min threshold.")
+        return False
+    except ValueError:
+        print("[DEBUG] Blob detection raised a ValueError.")
+        return False
+    
 # Initialize robot using robot_comms
 bot = get_bot(test_mode=args.test, ip=args.ip, debug=args.debug)
 robot = RobotController(bot, debug=args.debug)
@@ -84,6 +124,10 @@ model = Net()
 model.load_state_dict(torch.load('best_model.pth'))
 model.eval()
 
+# Determine device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
 # Initialize CLAHE
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
 
@@ -122,7 +166,16 @@ try:
         im = im[120:, :, :]
         if args.debug:
             print(f"[DEBUG] Cropped image shape: {im.shape}")
-
+        
+        if detect_stop_sign(im):
+            print("STOP SIGN DETECTED!")
+            # Immediately stop the robot if stop sign detected
+            robot.queue_command(0, 0)
+            time.sleep(2)
+        else:
+            if args.debug:
+                print("[DEBUG] No stop sign detected.")
+        
         # Apply CLAHE
         im_lab = cv2.cvtColor(im, cv2.COLOR_BGR2LAB)
         im_lab[:, :, 0] = clahe.apply(im_lab[:, :, 0])
@@ -133,11 +186,11 @@ try:
         # Convert to tensor and normalize
         im_tensor = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Resize((60, 60)),
+            transforms.Resize((120, 120)),
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])(im).unsqueeze(0)
 
-        #im_tensor = im_tensor.to('gpu')
+        im_tensor = im_tensor.to(device)
 
         if args.debug:
             print(f"[DEBUG] Running model with: {im_tensor.shape}")
@@ -147,17 +200,21 @@ try:
             output_tensor = model(im_tensor)
             if args.debug:
                 print(f"[DEBUG] Raw model output: {output_tensor}")
-            speeds = output_tensor[0].numpy() * 60.0  # Denormalize speeds
+            # Transfer to CPU before converting to NumPy
+            speeds = output_tensor[0].cpu().numpy() * 60.0  # Denormalize speeds
+            speeds = np.clip(speeds, -60, 60)
+            speeds = speeds.astype(int)
 
         if args.debug:
             print(f"[DEBUG] Calculated Speeds: {speeds}")
-
         # Queue commands at fixed rate
         if current_time - last_command_time >= command_interval:
-            if last_speeds is None or not np.array_equal(speeds, last_speeds):
-                robot.queue_command(*speeds)
-                last_speeds = speeds
+            robot.queue_command(*speeds)
+            #if last_speeds is None or not np.array_equal(speeds, last_speeds):
+                
+                #last_speeds = speeds
             last_command_time = current_time
+
 except KeyboardInterrupt:
     robot.queue_command(0, 0)
     robot.stop()

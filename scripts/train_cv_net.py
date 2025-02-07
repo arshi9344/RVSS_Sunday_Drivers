@@ -39,18 +39,16 @@ def is_running_in_ssh():
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Resize((120, 120)),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),  # RGB version
-    # transforms.Normalize((0.5,), (0.5,)),d  # Grayscale version
+    transforms.ColorJitter(
+        brightness=0.2,  # Brightness variation of ±20%
+        contrast=0.2,    # Contrast variation of ±20%
+        saturation=0.2,  # Saturation variation of ±20%
+        hue=0.1         # Slight hue shifts (±10% of total hue range)
+    ),
+    # Random adjustments to lighting
+    transforms.RandomAdjustSharpness(sharpness_factor=1.5, p=0.15),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
 ])
-
-#Helper function for visualising images in our dataset
-def imshow(img):
-    img = img / 2 + 0.5 #unnormalize
-    npimg = img.numpy()
-    npimg = np.transpose(npimg, (1, 2, 0))
-    #rgbimg = npimg[:,:,::-1] makes the red hues blue but too scared to remove
-    plt.imshow(npimg)
-    plt.show()
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 datasets_path = os.path.join(script_path, '..', 'data', 'datasets_4_training')
@@ -204,8 +202,7 @@ class Net(nn.Module):
 
         # 3) Fully connected
         #    Flattened dimension after conv/pool is 1600, so fc1 in_features=1600
-        #self.fc1 = nn.Linear(1600, 256) ##60x60
-        self.fc1 = nn.Linear(10816, 256)
+        self.fc1 = nn.Linear(1600, 256)
         self.fc2 = nn.Linear(256, 128)
         self.fc3 = nn.Linear(128, 2)  # final 2 outputs (e.g. left/right speeds)
 
