@@ -26,16 +26,18 @@ def detect_stop_sign(image, sign_area_min=200, sign_area_max=500):
     Returns True if a blob with area greater than sign_area_min is found.
     """
     print("[DEBUG] Original image shape:", image.shape)
+    # Add horizontal cropping while keeping vertical crop
     h, w, _ = image.shape
-    cropped = image[h//2:, :]
-    print("[DEBUG] After cropping bottom half, cropped shape:", cropped.shape)
+    crop_horizontal = w//6  # Cut 1/6 from each side
+    cropped = image[h//2:, crop_horizontal:w-crop_horizontal]
+    print("[DEBUG] After cropping bottom half and middle portion, shape:", cropped.shape)
 
     # Convert to HSV for thresholding red
     hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
     print("[DEBUG] Converted cropped image to HSV.")
     
     lower_red = np.array([165, 50, 50])
-    upper_red = np.array([180, 255, 255])
+    upper_red = np.array([180, 220, 220]) # upper_red = np.array([180, 255, 255])
     mask = cv2.inRange(hsv, lower_red, upper_red)
     print("[DEBUG] Created red threshold mask, mask shape:", mask.shape)
     
@@ -54,10 +56,10 @@ def detect_stop_sign(image, sign_area_min=200, sign_area_max=500):
         print("[DEBUG] Blob detection returned", len(blobs), "blob(s).")
         for b in blobs:
             print("[DEBUG] Blob area:", b.area)
-            if b.area > sign_area_min:
-                print("[DEBUG] Blob area exceeds threshold, stop sign detected.")
+            if sign_area_min <= b.area <= sign_area_max:
+                print(f"[DEBUG] Blob area {b.area} within threshold range [{min_area}, {max_area}], stop sign detected.")
                 return True
-        print("[DEBUG] No blob exceeded the sign_area_min threshold.")
+        print(f"[DEBUG] No blob area within threshold range [{min_area}, {max_area}].")
         return False
     except ValueError:
         print("[DEBUG] Blob detection raised a ValueError.")
