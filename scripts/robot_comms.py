@@ -25,7 +25,8 @@ class RobotController:
         self.command_rate = COMMAND_RATE
         self.capture_fps = CAPTURE_FPS
         self.command_queue = Queue(maxsize=1)  # Increased for smoother control
-        self.image_queue = Queue(maxsize=10)
+        self.image_queue = Queue(maxsize=10)  # For deployment
+        self.save_queue = Queue(maxsize=10)   # For saving to disk
         self._running = False
         self._threads = {}
         self._last_command = None
@@ -58,28 +59,42 @@ class RobotController:
                     print(f"[ERROR] Control thread error: {e}")
                 break
 
-    def _image_thread(self, save_dir, im_num):
-        """Handle image capture and saving"""
+    def _image_thread(self, save_dir=None, im_num=0):
+        """Handle image capture and return/save"""
         self._threads['image'] = {'active': True, 'healthy': True}
-        local_im_num = im_num
         last_capture = time.time()
+        local_im_num = im_num
 
         while self._running and self._threads['image']['active']:
             try:
                 if time.time() - last_capture >= 1/self.capture_fps:
-                    try:
-                        command = self.image_queue.get(timeout=0.1)
-                        if command is None:
-                            break
-                        angle, left, right, is_stopped = command
-                        img = self.bot.getImage()
-                        if img is not None and is_stopped == False:
-                            image_name = f"{str(local_im_num).zfill(6)}_{angle:.2f}_{left}_{right}.jpg"
-                            cv2.imwrite(os.path.join(save_dir, image_name), img)
-                            local_im_num += 1
-                            last_capture = time.time()
-                    except Empty:
-                        pass
+                    img = self.bot.getImage()
+                    if img is not None:
+                        # Put image in queue for retrieval
+                        try:
+                            self.image_queue.put_nowait(img)
+                        except Full:
+                            # Clear old image if queue full
+                            try:
+                                self.image_queue.get_nowait()
+                                self.image_queue.put_nowait(img)
+                            except Empty:
+                                pass
+                                
+                        # Save image if directory provided
+                        if save_dir:
+                            try:
+                                command = self.command_queue.get_nowait()
+                                angle, left, right, is_stopped = command
+                                if not is_stopped:
+                                    image_name = f"{str(local_im_num).zfill(6)}_{angle:.2f}_{left}_{right}.jpg"
+                                    cv2.imwrite(os.path.join(save_dir, image_name), img)
+                                    local_im_num += 1
+                            except Empty:
+                                pass
+                                
+                    last_capture = time.time()
+                    
                 time.sleep(0.001)
             except Exception as e:
                 self._threads['image']['healthy'] = False

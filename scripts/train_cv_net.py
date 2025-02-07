@@ -128,26 +128,26 @@ for i in range(len(dataset)):
     left_speeds.append(speeds[0].item())
     right_speeds.append(speeds[1].item())
 
-# # Create figure with two subplots
-# plt.figure(figsize=(12, 5))
+# Create figure with two subplots
+plt.figure(figsize=(12, 5))
 
-# # Left speeds distribution
-# plt.subplot(1, 2, 1)
-# plt.hist(left_speeds, bins=20, color='blue', alpha=0.7)
-# plt.xlabel('Left Wheel Speed')
-# plt.ylabel('Count')
-# plt.title('Left Wheel Speed Distribution')
+# Left speeds distribution
+plt.subplot(1, 2, 1)
+plt.hist(left_speeds, bins=20, color='blue', alpha=0.7)
+plt.xlabel('Left Wheel Speed')
+plt.ylabel('Count')
+plt.title('Left Wheel Speed Distribution')
 
-# # Right speeds distribution  
-# plt.subplot(1, 2, 2)
-# plt.hist(right_speeds, bins=20, color='red', alpha=0.7)
-# plt.xlabel('Right Wheel Speed')
-# plt.ylabel('Count')
-# plt.title('Right Wheel Speed Distribution')
+# Right speeds distribution  
+plt.subplot(1, 2, 2)
+plt.hist(right_speeds, bins=20, color='red', alpha=0.7)
+plt.xlabel('Right Wheel Speed')
+plt.ylabel('Count')
+plt.title('Right Wheel Speed Distribution')
 
-# plt.tight_layout()
-# plt.savefig('speed_distributions.png')
-# plt.show()
+plt.tight_layout()
+plt.savefig('speed_distributions.png')
+plt.show()
 
 print(f"Speed ranges:")
 print(f"Left: {min(left_speeds):.1f} to {max(left_speeds):.1f}")
