@@ -203,7 +203,7 @@ def main():
             print(*speeds)
 
             if args.collect:
-                robot.image_queue.put((angle, *speeds, is_stopped))
+                robot.save_queue.put((angle, *speeds, is_stopped))
 
     except KeyboardInterrupt:
         debug_print("Keyboard interrupt detected", args.debug)

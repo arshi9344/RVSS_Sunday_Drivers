@@ -20,6 +20,7 @@ parser = argparse.ArgumentParser(description='PiBot client')
 parser.add_argument('--ip', type=str, default='localhost', help='IP address of PiBot')
 parser.add_argument('--test', action='store_true', default=False, help='Run in test mode')
 parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+parser.add_argument('--debug_images', action='store_true', help='Show debug image windows')
 args = parser.parse_args()
 
 # Initialize robot using robot_comms
@@ -36,8 +37,12 @@ BASE_SPEED = 40
 TURN_SPEED = 40
 
 #LOAD NETWORK WEIGHTS HERE
-model = torch.load('best_model.pth')
+model = Net()
+model.load_state_dict(torch.load('best_model.pth'))
 model.eval()
+
+# Initialize CLAHE
+clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
 
 #countdown before beginning
 print("Get ready...")
@@ -58,18 +63,42 @@ try:
 
     while True:
         current_time = time.time()
-        # get an image from the the robot
-        im = robot.image_queue.put(angle, *speeds, is_stopped)
+        # Get image from queue
+        im = robot.image_queue.get()
         if im is None:
+            if args.debug:
+                print("[DEBUG] No image received")
             continue
+            
+        if args.debug:
+            print(f"[DEBUG] Got image shape: {im.shape}")
+            
+        # Process image    
+        im = im[120:, :, :]
+        if args.debug:
+            print(f"[DEBUG] Cropped image shape: {im.shape}")
+            
+        # # Show debug window
+        # if args.debug_images:
+        #     cv2.imshow('Raw Image', im)
+        #     cv2.waitKey(1)
 
-        # Process image for model
-        im_tensor = transforms.ToTensor()(im).unsqueeze(0)
+        # Apply CLAHE
+        im_lab = cv2.cvtColor(im, cv2.COLOR_BGR2LAB)
+        im_lab[:,:,0] = clahe.apply(im_lab[:,:,0])
+        im = cv2.cvtColor(im_lab, cv2.COLOR_LAB2RGB)
         
-        # Get model prediction
+        # Convert to tensor and normalize
+        im_tensor = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Resize((60, 60)),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])(im).unsqueeze(0)
+
+        # Model inference
         with torch.no_grad():
             output_tensor = model(im_tensor)
-            speeds = (output_tensor[0].item(), output_tensor[0].item())  # Assuming model outputs steering angle
+            speeds = output_tensor[0].numpy() * 60.0  # Denormalize speeds
 
         #TO DO: check for stop signs?
         

@@ -11,10 +11,10 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "args": [
-                "--ip",
-                "192.168.1.179",
+                // "--ip",
+                // "192.168.1.179",
                 // "--test",
-                "--debug"
+                // "--debug"
                 // "--collect"
             ]
         }
