@@ -122,7 +122,7 @@ class Net(nn.Module):
     
 #LOAD NETWORK WEIGHTS HERE
 model = Net()
-model.load_state_dict(torch.load('best_model.pth', map_location=torch.device('cpu'),weights_only=True))
+model.load_state_dict(torch.load('best_model_10.pth', map_location=torch.device('cpu'),weights_only=True))
 model.eval()
 
 # Determine device
