@@ -55,7 +55,7 @@ def detect_stop_sign(image, min_area=200, max_area=500):
         print("[DEBUG] Blob detection returned", len(blobs), "blob(s).")
         for b in blobs:
             print("[DEBUG] Blob area:", b.area)
-            if b.area > sign_area_min:
+            if b.area > sign_area_min and b.area < sign_area_max:
                 print("[DEBUG] Blob area exceeds threshold, stop sign detected.")
                 return True
         print("[DEBUG] No blob exceeded the sign_area_min threshold.")
