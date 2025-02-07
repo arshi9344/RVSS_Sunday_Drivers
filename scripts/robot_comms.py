@@ -15,7 +15,7 @@ try:
 except ImportError:
     PiBot = None
 
-COMMAND_RATE = 10  # Unified command rate at 20Hz
+COMMAND_RATE = 10  # Unified command rate at 10Hz
 CAPTURE_FPS = 30   
 
 class RobotController:
@@ -46,7 +46,7 @@ class RobotController:
                         if command is None:
                             break
                         left, right = command
-                        self.bot.setVelocity(left, right, None, 0.5)  # Keep original method name
+                        self.bot.setVelocity(left, right, None, 0.25)  # Keep original method name
                         if self.debug:
                             print(f"[DEBUG] Sent command: L={left} R={right}")
                     except Empty:
@@ -80,12 +80,12 @@ class RobotController:
                                 self.image_queue.put_nowait(img)
                             except Empty:
                                 pass
-                                
-                        # Save image if directory provided
+
+                        # Save image if directory provided using dedicated save_queue
                         if save_dir:
                             try:
-                                command = self.command_queue.get_nowait()
-                                angle, left, right, is_stopped = command
+                                metadata = self.save_queue.get_nowait()
+                                angle, left, right, is_stopped = metadata
                                 if not is_stopped:
                                     image_name = f"{str(local_im_num).zfill(6)}_{angle:.2f}_{left}_{right}.jpg"
                                     cv2.imwrite(os.path.join(save_dir, image_name), img)
@@ -113,14 +113,9 @@ class RobotController:
         self.control_thread = threading.Thread(target=self._control_thread, daemon=True)
         self.control_thread.start()
         
-        # Start image thread if needed
-        if save_dir:
-            self.image_thread = threading.Thread(
-                target=self._image_thread,
-                args=(save_dir, im_num),
-                daemon=True
-            )
-            self.image_thread.start()
+        # Always start image thread
+        self.image_thread = threading.Thread(target=self._image_thread, args=(save_dir, im_num), daemon=True)
+        self.image_thread.start()
             
         # Verify threads started
         time.sleep(0.1)  # Brief pause to let threads initialize
