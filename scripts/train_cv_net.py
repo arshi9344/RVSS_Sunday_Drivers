@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 
 from steerDS import SteerDataSet
 
+from model import Net
+
+
 def seed_everything(random_seed: int):
     np.random.seed(random_seed)
     torch.manual_seed(random_seed)
@@ -58,15 +61,6 @@ transform = transforms.Compose([
 script_path = os.path.dirname(os.path.realpath(__file__))
 datasets_path = os.path.join(script_path, '..', 'data', 'datasets_4_training')
 
-#Helper function for visualising images in our dataset
-def imshow(img):
-    img = img / 2 + 0.5 #unnormalize
-    npimg = img.numpy()
-    npimg = np.transpose(npimg, (1, 2, 0))
-    #rgbimg = npimg[:,:,::-1] makes the red hues blue but too scared to remove
-    plt.imshow(npimg)
-    plt.show()
-    
 # Debug directory structure
 print(f"Looking for datasets in: {datasets_path}")
 if not os.path.exists(datasets_path):
@@ -195,108 +189,6 @@ samples_weight = torch.FloatTensor(samples_weight)
 
 # Create weighted sampler
 sampler = WeightedRandomSampler(samples_weight, len(samples_weight))
-
-
-#######################################################################################################################################
-####     INITIALISE OUR NETWORK                                                                                                    ####
-#######################################################################################################################################
-
-class Net(nn.Module):
-    def __init__(self):
-        super().__init__()
-        
-        # 1) Convolution + Pooling block
-        self.conv1 = nn.Conv2d(3, 16, 3)  # RGB version
-        # self.conv1 = nn.Conv2d(1, 16, 3)    # Grayscale version
-        self.conv2 = nn.Conv2d(16, 32, 3)
-        self.conv3 = nn.Conv2d(32, 64, 3)
-        
-        # 2) Pooling layer
-        self.pool = nn.MaxPool2d(kernel_size=2)
-
-        # 3) Fully connected
-        #    Flattened dimension after conv/pool is 1600, so fc1 in_features=1600
-        self.fc1 = nn.Linear(1600, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, 2)  # final 2 outputs (e.g. left/right speeds)
-
-        # Optional: You can define activation once and reuse, or inline them in forward
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        # input shape: [batch_size, 3, 60, 60]
-
-        # Conv1 -> ReLU -> Pool => [batch_size, 16, 29, 29]
-        x = self.pool(self.relu(self.conv1(x)))
-        
-        # Conv2 -> ReLU -> Pool => [batch_size, 32, 13, 13]
-        x = self.pool(self.relu(self.conv2(x)))
-        
-        # Conv3 -> ReLU -> Pool => [batch_size, 64, 5, 5]
-        x = self.pool(self.relu(self.conv3(x)))
-
-        # Flatten => [batch_size, 64*5*5 = 1600]
-        x = torch.flatten(x, start_dim=1)
-        
-        # Fully connected layers
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
-        out = self.fc3(x)  # shape: [batch_size, 2]
-
-        return out
-    #     # Convolutional layers (Feature Extraction)
-    #     self.conv1 = nn.Conv2d(3, 6, kernel_size=5)
-    #     self.conv2 = nn.Conv2d(6, 16, kernel_size=5)
-    #     self.conv3 = nn.Conv2d(16, 32, kernel_size=3)
-    #     self.conv4 = nn.Conv2d(32, 64, kernel_size=3)
-    #     self.conv5 = nn.Conv2d(64, 64, kernel_size=3)
-
-    #     # Pooling layer (Downsampling)
-    #     self.pool = nn.MaxPool2d(kernel_size=2) #, stride=2)  # Reduce spatial dimensions by 2x
-
-    #     # Fully Connected Layers (Decision Making)
-    #     self.fc1 = nn.Linear(64, 256)  # Adjusted to match output feature map size
-    #     self.fc2 = nn.Linear(256, 128)  # Added extra FC layer for better decision-making
-    #     self.fc3 = nn.Linear(128, 2)  # Change to 2 outputs for left/right speeds
-        
-    #     # Activation function
-    #     self.relu = nn.ReLU()
-
-    # def forward(self, x):
-    #     x = self.pool(self.relu(self.conv1(x)))  # Conv1 → ReLU → MaxPool
-    #     x = self.pool(self.relu(self.conv2(x)))  # Conv2 → ReLU → MaxPool
-    #     x = self.relu(self.conv3(x))  # Conv3 → ReLU
-    #     x = self.relu(self.conv4(x))  # Conv4 → ReLU
-    #     x = self.relu(self.conv5(x))  # Conv5 → ReLU
-
-    #     # Flatten before feeding into fully connected layers
-    #     x = torch.flatten(x, start_dim=1)  # Flatten all dimensions except batch
-
-    #     # Fully Connected Layers + Activation
-    #     x = self.relu(self.fc1(x))  # FC1 → ReLU
-    #     x = self.relu(self.fc2(x))  # FC2 → ReLU
-    #     output = self.fc3(x)  # Now outputs (left_speed, right_speed)
-
-    #     return output
-
-    # def __init__(self):
-    #     super().__init__()
-    #     self.conv1 = nn.Conv2d(3, 6, 5)
-    #     self.conv2 = nn.Conv2d(6, 16, 5)
-    #     self.pool = nn.MaxPool2d(2, 2)
-    #     self.fc1 = nn.Linear(384, 256)
-    #     self.fc2 = nn.Linear(256, 5)
-    #     self.relu = nn.ReLU()
-    
-    # def forward(self, x):
-    #     x = self.pool(self.relu(self.conv1(x)))
-    #     x = self.pool(self.relu(self.conv2(x)))
-    #     x = torch.flatten(x, 1)
-    #     x = self.fc1(x)
-    #     x = self.relu(x)
-    #     x = self.fc2(x)
-    #     return x
-
 
 #######################################################################################################################################
 ####     K-FOLD CROSS VALIDATION                                                                                                  ####
