@@ -9,12 +9,17 @@ import os
 import numpy as np
 import sklearn.metrics as metrics
 from sklearn.model_selection import KFold
+import random
 
 import matplotlib.pyplot as plt
 
 from steerDS import SteerDataSet
 
-torch.manual_seed(10)
+def seed_everything(random_seed: int):
+    np.random.seed(random_seed)
+    torch.manual_seed(random_seed)
+    torch.cuda.manual_seed_all(random_seed)
+    random.seed(random_seed)
 
 # torch.backends.cudnn.benchmark = True
 # torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of available memory
@@ -310,6 +315,10 @@ best_loss = float('inf')
 ####     TRAINING                                                                                                                  ####
 #######################################################################################################################################
 
+# SEEDED TRAINING. Use different seeds! cals seed
+seed = 10
+seed_everything(seed)
+
 # Initialize results dictionary with both MSE and MAE
 results = {f'fold_{i}': {'mse': 0, 'mae': 0} for i in range(k_folds)}
 
@@ -427,7 +436,7 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
         if val_mse < best_loss:  # Change from accuracy to loss
             best_loss = val_mse
             best_fold = fold
-            torch.save(net.state_dict(), 'best_model.pth')
+            torch.save(net.state_dict(), f'best_model_{seed}.pth')
 
         scheduler.step(val_loss)
         print(f'Current LR: {optimizer.param_groups[0]["lr"]}')
@@ -447,7 +456,7 @@ for fold, (train_ids, val_ids) in enumerate(kf.split(dataset)):
 ####     PERFORMANCE EVALUATION                                                                                                    ####
 #######################################################################################################################################
 print('Best Fold:', best_fold)
-net.load_state_dict(torch.load(f'best_model.pth', weights_only=True))
+net.load_state_dict(torch.load(f'best_model_{seed}.pth', weights_only=True))
 
 correct = 0
 total = 0
