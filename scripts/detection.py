@@ -72,7 +72,7 @@ class DetectionInterface:
 def main():
     # Initialize detector
     detector = DetectionInterface(
-        model_path="runs/detect/train10/weights/best.pt",
+        model_path="runs/detect/train2/weights/best.pt",
         conf_threshold=0.95,
         area=1500
     )
