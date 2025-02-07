@@ -98,39 +98,38 @@ print("1")
 time.sleep(1)
 print("GO!")
 
-try:
-    angle = 0
-    is_stopped = bool(False)
-    speeds = (0, 0)
-    command_interval = 1.0 / 20  # 20Hz command rate
+# BEFORE the loop starts, e.g. right after printing "GO!"
+last_command_time = time.time()
+last_speeds = None
+command_interval = 0.1  # 10 Hz command rate
 
+try:
     while True:
         current_time = time.time()
         # Get image from queue
+        if args.debug:
+            print(f"[DEBUG] requesting image")
         im = robot.image_queue.get()
         if im is None:
             if args.debug:
                 print("[DEBUG] No image received")
             continue
-            
+
         if args.debug:
             print(f"[DEBUG] Got image shape: {im.shape}")
-            
+
         # Process image    
         im = im[120:, :, :]
         if args.debug:
             print(f"[DEBUG] Cropped image shape: {im.shape}")
-            
-        # # Show debug window
-        # if args.debug_images:
-        #     cv2.imshow('Raw Image', im)
-        #     cv2.waitKey(1)
 
         # Apply CLAHE
         im_lab = cv2.cvtColor(im, cv2.COLOR_BGR2LAB)
-        im_lab[:,:,0] = clahe.apply(im_lab[:,:,0])
+        im_lab[:, :, 0] = clahe.apply(im_lab[:, :, 0])
         im = cv2.cvtColor(im_lab, cv2.COLOR_LAB2RGB)
-        
+        if args.debug:
+            print(f"[DEBUG] applied image transform:")
+
         # Convert to tensor and normalize
         im_tensor = transforms.Compose([
             transforms.ToTensor(),
@@ -138,22 +137,27 @@ try:
             transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
         ])(im).unsqueeze(0)
 
+        #im_tensor = im_tensor.to('gpu')
+
+        if args.debug:
+            print(f"[DEBUG] Running model with: {im_tensor.shape}")
+
         # Model inference
         with torch.no_grad():
             output_tensor = model(im_tensor)
+            if args.debug:
+                print(f"[DEBUG] Raw model output: {output_tensor}")
             speeds = output_tensor[0].numpy() * 60.0  # Denormalize speeds
 
-        #TO DO: check for stop signs?
-        
+        if args.debug:
+            print(f"[DEBUG] Calculated Speeds: {speeds}")
+
         # Queue commands at fixed rate
         if current_time - last_command_time >= command_interval:
-            if speeds != last_speeds:
+            if last_speeds is None or not np.array_equal(speeds, last_speeds):
                 robot.queue_command(*speeds)
                 last_speeds = speeds
             last_command_time = current_time
-
-            
-        
 except KeyboardInterrupt:
     robot.queue_command(0, 0)
     robot.stop()
