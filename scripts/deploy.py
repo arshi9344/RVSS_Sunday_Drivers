@@ -20,7 +20,7 @@ parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 parser.add_argument('--debug_images', action='store_true', help='Show debug image windows')
 args = parser.parse_args()
 
-def detect_stop_sign(image, sign_area_min=200, sign_area_max=500):
+def detect_stop_sign(image, sign_area_min=300, sign_area_max=500):
     """
     Detect a stop sign in the given image based on red color blob detection.
     Returns True if a blob with area greater than sign_area_min is found.
@@ -54,7 +54,7 @@ def detect_stop_sign(image, sign_area_min=200, sign_area_max=500):
         print("[DEBUG] Blob detection returned", len(blobs), "blob(s).")
         for b in blobs:
             print("[DEBUG] Blob area:", b.area)
-            if b.area > sign_area_min:
+            if b.area > sign_area_min and b.area < sign_area_max:
                 print("[DEBUG] Blob area exceeds threshold, stop sign detected.")
                 return True
         print("[DEBUG] No blob exceeded the sign_area_min threshold.")
