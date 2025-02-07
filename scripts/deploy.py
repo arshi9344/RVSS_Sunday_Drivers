@@ -20,22 +20,25 @@ parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 parser.add_argument('--debug_images', action='store_true', help='Show debug image windows')
 args = parser.parse_args()
 
-def detect_stop_sign(image, sign_area_min=200, sign_area_max=500):
+def detect_stop_sign(image, min_area=200, max_area=500):
     """
     Detect a stop sign in the given image based on red color blob detection.
-    Returns True if a blob with area greater than sign_area_min is found.
+    Returns True if a blob's area is between min_area and max_area.
     """
     print("[DEBUG] Original image shape:", image.shape)
     h, w, _ = image.shape
-    cropped = image[h//2:, :]
-    print("[DEBUG] After cropping bottom half, cropped shape:", cropped.shape)
+    
+    # Add horizontal cropping while keeping vertical crop
+    crop_horizontal = w//6  # Cut 1/6 from each side
+    cropped = image[h//2:, crop_horizontal:w-crop_horizontal]
+    print("[DEBUG] After cropping bottom half and middle portion, shape:", cropped.shape)
 
     # Convert to HSV for thresholding red
     hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
     print("[DEBUG] Converted cropped image to HSV.")
     
     lower_red = np.array([165, 50, 50])
-    upper_red = np.array([180, 255, 255])
+    upper_red = np.array([180, 220, 220])  # Reduced upper values from stop_blob3
     mask = cv2.inRange(hsv, lower_red, upper_red)
     print("[DEBUG] Created red threshold mask, mask shape:", mask.shape)
     
@@ -54,10 +57,10 @@ def detect_stop_sign(image, sign_area_min=200, sign_area_max=500):
         print("[DEBUG] Blob detection returned", len(blobs), "blob(s).")
         for b in blobs:
             print("[DEBUG] Blob area:", b.area)
-            if b.area > sign_area_min:
-                print("[DEBUG] Blob area exceeds threshold, stop sign detected.")
+            if min_area <= b.area <= max_area:
+                print(f"[DEBUG] Blob area {b.area} within threshold range [{min_area}, {max_area}], stop sign detected.")
                 return True
-        print("[DEBUG] No blob exceeded the sign_area_min threshold.")
+        print(f"[DEBUG] No blob area within threshold range [{min_area}, {max_area}].")
         return False
     except ValueError:
         print("[DEBUG] Blob detection raised a ValueError.")
@@ -121,7 +124,7 @@ class Net(nn.Module):
     
 #LOAD NETWORK WEIGHTS HERE
 model = Net()
-model.load_state_dict(torch.load('best_model.pth'))
+model.load_state_dict(torch.load('best_model.pth', map_location=torch.device('cpu'),weights_only=True))
 model.eval()
 
 # Determine device
