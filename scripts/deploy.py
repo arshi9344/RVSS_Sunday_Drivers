@@ -20,12 +20,13 @@ parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 parser.add_argument('--debug_images', action='store_true', help='Show debug image windows')
 args = parser.parse_args()
 
-def detect_stop_sign(image, sign_area_min=300, sign_area_max=500):
+def detect_stop_sign(image, min_area=200, max_area=500):
     """
     Detect a stop sign in the given image based on red color blob detection.
-    Returns True if a blob with area greater than sign_area_min is found.
+    Returns True if a blob's area is between min_area and max_area.
     """
     print("[DEBUG] Original image shape:", image.shape)
+    # Add horizontal cropping while keeping vertical crop
     h, w, _ = image.shape
     cropped = image[h//2:, :]
     print("[DEBUG] After cropping bottom half, cropped shape:", cropped.shape)
@@ -121,7 +122,7 @@ class Net(nn.Module):
     
 #LOAD NETWORK WEIGHTS HERE
 model = Net()
-model.load_state_dict(torch.load('best_model.pth'))
+model.load_state_dict(torch.load('best_model.pth', map_location=torch.device('cpu'),weights_only=True))
 model.eval()
 
 # Determine device
