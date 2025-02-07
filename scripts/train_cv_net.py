@@ -34,10 +34,21 @@ def is_running_in_ssh():
 #######################################################################################################################################
 ####     SETTING UP THE DATASET                                                                                                    ####
 #######################################################################################################################################
-transform = transforms.Compose([transforms.ToTensor(),
-                                transforms.Resize((60, 60)),
-                                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-                                ])
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Resize((60, 60)),
+    # Add color jittering for brightness, contrast, and saturation
+    # Using moderate values to preserve overall image structure
+    transforms.ColorJitter(
+        brightness=0.2,  # Brightness variation of ±20%
+        contrast=0.2,    # Contrast variation of ±20%
+        saturation=0.2,  # Saturation variation of ±20%
+        hue=0.1         # Slight hue shifts (±10% of total hue range)
+    ),
+    # Random adjustments to lighting
+    transforms.RandomAdjustSharpness(sharpness_factor=1.5, p=0.15),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+])
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 datasets_path = os.path.join(script_path, '..', 'data', 'datasets_4_training')
