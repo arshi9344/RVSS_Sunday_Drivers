@@ -1,136 +1,125 @@
 #!/usr/bin/env python3
-import time
-import os
 import cv2
 import numpy as np
 import argparse
-import matplotlib
-matplotlib.use("tkagg")  # or another backend if desired
+import time
 from machinevisiontoolbox import Image
+
+import matplotlib
+matplotlib.use("tkagg")  # or whichever backend works for your environment
+
 from robot_comms import get_bot, RobotController
 
-# Define the script path so images can be saved appropriately
-script_path = os.path.dirname(os.path.realpath(__file__))
-
-def detect_stop_sign_and_draw(frame_bgr, area_min=200, area_max=500):
+def detect_stop_sign_with_crop(frame_bgr, sign_area_min=200, sign_area_max=550):
     """
-    Given a BGR frame from the PiBot's camera, do:
-     - Crop
-     - Convert to HSV
-     - Threshold red
-     - Morphological open
-     - Blob detection (MVT)
-     - Draw bounding boxes on a copy of the mask for visualization
+    Follows the logic from 'stop_blob.py':
+      1. Crop bottom half + horizontal slice
+      2. Convert to HSV
+      3. Threshold for red [165..180, 50..220, 50..220]
+      4. Morphological open
+      5. Blob detection with MVT
     Returns:
-      - detected: bool, True if a blob's area is between area_min and area_max
-      - display_mask: an 8-bit image with bounding boxes drawn (for display)
+      - detected: bool (True if any blob area > sign_area_min)
+      - overlay:  BGR image for visualization of the mask and bounding boxes
     """
 
-    # 1. Crop to bottom half
+    # -------------------------------------------------
+    # STEP 1: Crop (bottom half + horizontal slice)
+    # -------------------------------------------------
     h, w = frame_bgr.shape[:2]
-    frame_cropped = frame_bgr[h//2:, :]
+    crop_vertical = h // 2         # bottom half
+    crop_horizontal = w // 6       # remove ~1/6 from each side
+    # Crop vertically, then horizontally
+    frame_cropped = frame_bgr[crop_vertical:, crop_horizontal : w - crop_horizontal]
+    ch, cw = frame_cropped.shape[:2]  # for reference
 
-    # 2. Convert to HSV
+    # -------------------------------------------------
+    # STEP 2: Convert to HSV + Threshold
+    # -------------------------------------------------
     hsv = cv2.cvtColor(frame_cropped, cv2.COLOR_BGR2HSV)
-
-    # 3. Threshold for red (tweak as needed)
-    lower_red = np.array([165, 50, 50])
+    
+    # Red range from stop_blob.py
+    lower_red = np.array([165,  50,  50])
     upper_red = np.array([180, 255, 255])
     mask = cv2.inRange(hsv, lower_red, upper_red)
 
-    # 4. Light morphological opening
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    # -------------------------------------------------
+    # STEP 3: Morphological open (to keep holes for letters)
+    # -------------------------------------------------
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    mask_clean_cv = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
 
-    # 5. Wrap for MVT blob detection
-    mask_bool = mask_clean.astype(bool)
-    mvt_im = Image(mask_bool)
-
+    # -------------------------------------------------
+    # STEP 4: Blob detection
+    # -------------------------------------------------
+    mask_bool = mask_clean_cv.astype(bool)
+    mvt_image = Image(mask_bool)
+    
     detected = False
-
-    # Prepare a 3-channel image to draw colored boxes (yellow rectangles, etc.)
-    display_mask = cv2.cvtColor(mask_clean, cv2.COLOR_GRAY2BGR)
+    # For drawing bounding boxes on the mask
+    overlay = cv2.cvtColor(mask_clean_cv, cv2.COLOR_GRAY2BGR)
 
     try:
-        blobs = mvt_im.blobs()
+        blobs = mvt_image.blobs()
         for b in blobs:
-            if area_min <= b.area <= area_max:
+            if b.area > sign_area_min:
                 detected = True
-                print(f"STOP SIGN DETECTED OF AREA {b.area:.1f} (within [{area_min}, {area_max}])")
-            # Draw bounding box around every blob for visualization
-            rmin, cmin, rmax, cmax = b.bbox
-            color = (0, 255, 255)  # yellow for blobs outside range
-            if area_min <= b.area <= area_max:
-                color = (0, 255, 0)  # green for blobs within range
-            cv2.rectangle(display_mask, (cmin, rmin), (cmax, rmax), color, 2)
+            
+            # Draw bounding box on overlay
+            (rmin, cmin, rmax, cmax) = b.bbox
+            color = (0, 255, 255)  # yellow
+            if b.area > sign_area_min:
+                color = (0, 255, 0)  # green for "big" blob
+            cv2.rectangle(overlay, (cmin, rmin), (cmax, rmax), color, 2)
     except ValueError:
         # no blobs found
         pass
 
-    return detected, display_mask
+    return detected, overlay
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ip", default="localhost", help="PiBot IP address")
+    parser.add_argument("--ip", default="localhost", help="IP of PiBot")
     parser.add_argument("--test", action="store_true", help="Test mode (no real robot)")
     parser.add_argument("--debug", action="store_true", help="Debug prints")
     args = parser.parse_args()
 
-    # Connect to robot
+    # Setup PiBot connection
     bot = get_bot(test_mode=args.test, ip=args.ip, debug=args.debug)
     robot = RobotController(bot, debug=args.debug)
     robot.start()
+    robot.queue_command(0,0)  # ensure robot is stopped initially
 
-    # Optionally stop the robot initially
-    robot.queue_command(0, 0)
-
-    print("Press Ctrl+C to quit.")
+    print("Press Ctrl+C to exit.")
 
     try:
-        # Add counter for saved images
-        save_counter = 0
-
         while True:
-            # Grab the latest image from the PiBot queue
-            frame_bgr = robot.image_queue.get()
+            frame_bgr = robot.image_queue.get()  # get the next camera frame
             if frame_bgr is None:
-                continue
+                continue  # no frame yet
 
-            # Show the raw camera feed in one window
+            # Show the raw camera feed
             cv2.imshow("Camera Feed", frame_bgr)
 
-            # Run the blob detection
-            found_stop, mask_vis = detect_stop_sign_and_draw(frame_bgr, area_min=200, area_max=500)
+            # Perform the custom stop-sign detection logic
+            found_sign, mask_overlay = detect_stop_sign_with_crop(frame_bgr, sign_area_min=2000)
 
-            # Show the thresholded mask + bounding boxes
-            cv2.imshow("Blob Detection", mask_vis)
+            if found_sign:
+                print("STOP SIGN DETECTED!")
+                # You could do something here, like stop the robot
+                # robot.queue_command(0, 0)
+
+            # Show the thresholded mask overlay
+            cv2.imshow("Blob Mask (Cropped + Red Threshold)", mask_overlay)
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # ESC to quit
                 break
-            elif key == ord('s'):  # 'S' key to save images
-                # Create 'saved_images' directory if it doesn't exist
-                save_dir = os.path.join(script_path, "saved_images")
-                os.makedirs(save_dir, exist_ok=True)
-                
-                # Save both original and mask images
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                orig_filename = os.path.join(save_dir, f"image_{timestamp}_{save_counter}.jpg")
-                mask_filename = os.path.join(save_dir, f"mask_{timestamp}_{save_counter}.jpg")
-                
-                cv2.imwrite(orig_filename, frame_bgr)
-                cv2.imwrite(mask_filename, mask_vis)
-                
-                print(f"Saved images to {orig_filename} and {mask_filename}")
-                save_counter += 1
 
-            # Optional: if found_stop, you could do something
-            # e.g. robot.queue_command(0,0) to stop
     except KeyboardInterrupt:
         pass
     finally:
-        # cleanup
-        robot.queue_command(0, 0)
+        robot.queue_command(0,0)
         robot.stop()
         cv2.destroyAllWindows()
 
