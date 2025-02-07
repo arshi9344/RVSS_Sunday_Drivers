@@ -1,0 +1,3 @@
+/home/ted/RVSS_Sunday_Drivers/data/Datasets_to_clean/20250207_164810 (big_mixed_counterclockwise)
+/home/ted/RVSS_Sunday_Drivers/data/Datasets_to_clean/20250207_165448(bigger_mixed_counterclockwise)
+/home/ted/RVSS_Sunday_Drivers/data/Datasets_to_clean/20250207_170812

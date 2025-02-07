@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import torchvision.transforms as transforms
 from robot_comms import RobotController, get_bot
 from machinevisiontoolbox import Image  # Required for blob detection
+from detection import DetectionInterface
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -123,7 +124,7 @@ class Net(nn.Module):
 #LOAD NETWORK WEIGHTS HERE
 model = Net()
 # model_path = os.path.join("ADAM_Models", "best_model_10.pth")
-model_path = os.path.join("best_model_10.pth")
+model_path = os.path.join("ADAM_Models" ,"model_3.pth")
 model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu'),weights_only=True))
 model.eval()
 
@@ -133,6 +134,13 @@ model.to(device)
 
 # Initialize CLAHE
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+
+# Initialize detector
+detector = DetectionInterface(
+    model_path=os.path.join(os.path.dirname(__file__), "best.pt"),
+    conf_threshold=0.95,
+    area=1500
+)
 
 #countdown before beginning
 print("Get ready...")
@@ -169,12 +177,30 @@ try:
         im = im[120:, :, :]
         if args.debug:
             print(f"[DEBUG] Cropped image shape: {im.shape}")
-        
-        # if detect_stop_sign(im):
-        #     print("STOP SIGN DETECTED!")
-        #     # Immediately stop the robot if stop sign detected
-        #     robot.queue_command(0, 0)
-        #     time.sleep(2)
+
+        # Check for stop sign
+        detection = detector.get_best_detection(im)
+        if detection and detection['class_name'] == 'sign':
+            # Get bounding box coordinates
+            x1, y1, x2, y2 = detection['box']
+            
+            # Check if box is in bottom third and cooldown elapsed
+            image_height = im.shape[0]
+            min_y = 2 * image_height // 3
+            
+            if y2 > min_y and (current_time - last_stop_time) > STOP_COOLDOWN:
+                print("STOP SIGN DETECTED!")
+                robot.queue_command(0, 0)
+                time.sleep(2)
+                last_stop_time = current_time
+                if args.debug:
+                    print(f"[DEBUG] Stop sign detected with confidence: {detection['confidence']:.3f}")
+                    print(f"[DEBUG] Box position: y2={y2}, threshold={min_y}")
+            elif args.debug:
+                if (current_time - last_stop_time) <= STOP_COOLDOWN:
+                    print("[DEBUG] Stop sign ignored - cooldown active")
+                else:
+                    print("[DEBUG] Sign detected but not in bottom third of image")
         else:
             if args.debug:
                 print("[DEBUG] No stop sign detected.")
@@ -205,7 +231,6 @@ try:
                 print(f"[DEBUG] Raw model output: {output_tensor}")
             # Transfer to CPU before converting to NumPy
             speeds = output_tensor[0].cpu().numpy() * 60.0  # Denormalize speeds
-            speeds = np.clip(speeds, -60, 60)
             speeds = speeds.astype(int)
 
         if args.debug:

@@ -9,9 +9,12 @@ import argparse
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 from robot_comms import RobotController, get_bot
-from machinevisiontoolbox import Image  # Required for blob detection
+from torch.func import stack_module_state, functional_call
+import copy
 import torch.func
 from model import Net
+# Add import for detection
+from detection import DetectionInterface
 
 script_path = os.path.dirname(os.path.realpath(__file__))
 
@@ -21,50 +24,10 @@ parser.add_argument('--test', action='store_true', default=False, help='Run in t
 parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 args = parser.parse_args()
 
-def detect_stop_sign(image, min_area=200, max_area=500):
-    """
-    Detect a stop sign in the given image based on red color blob detection.
-    Returns True if a blob's area is between min_area and max_area.
-    """
-    print("[DEBUG] Original image shape:", image.shape)
-    # Add horizontal cropping while keeping vertical crop
-    h, w, _ = image.shape
-    cropped = image[h//2:, :]
-    print("[DEBUG] After cropping bottom half, cropped shape:", cropped.shape)
+# Add at start of main script, after argument parsing:
+last_stop_time = 0
+STOP_COOLDOWN = 3  # seconds
 
-    # Convert to HSV for thresholding red
-    hsv = cv2.cvtColor(cropped, cv2.COLOR_BGR2HSV)
-    print("[DEBUG] Converted cropped image to HSV.")
-    
-    lower_red = np.array([165, 50, 50])
-    upper_red = np.array([180, 255, 255])
-    mask = cv2.inRange(hsv, lower_red, upper_red)
-    print("[DEBUG] Created red threshold mask, mask shape:", mask.shape)
-    
-    # Morphological operation to clean up the mask
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    mask_clean = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    print("[DEBUG] Applied morphological opening on mask.")
-    
-    # Convert mask to boolean and use MVT for blob detection
-    mask_bool = mask_clean.astype(bool)
-    print("[DEBUG] Converted cleaned mask to boolean.")
-    
-    mvt_im = Image(mask_bool)
-    try:
-        blobs = mvt_im.blobs()
-        print("[DEBUG] Blob detection returned", len(blobs), "blob(s).")
-        for b in blobs:
-            print("[DEBUG] Blob area:", b.area)
-            if b.area > min_area and b.area < max_area:
-                print("[DEBUG] Blob area exceeds threshold, stop sign detected.")
-                return True
-        print("[DEBUG] No blob exceeded the sign_area_min threshold.")
-        return False
-    except ValueError:
-        print("[DEBUG] Blob detection raised a ValueError.")
-        return False
-    
 # Initialize robot using robot_comms
 bot = get_bot(test_mode=args.test, ip=args.ip, debug=args.debug)
 robot = RobotController(bot, debug=args.debug)
@@ -81,35 +44,53 @@ TURN_SPEED = 40
 # Determine device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# After model definition, load multiple models into a list
+# Load models
 models = []
-models_dir = os.path.join(os.path.dirname(__file__), "ADAM_Models")
+models_dir = ("ADAM_Models")
 model_files = sorted([f for f in os.listdir(models_dir) if f.endswith('.pth')])
 
-if not model_files:
-    raise FileNotFoundError(f"No .pth model files found in {models_dir}")
-
-model_files = ['best_model_10.pth', 'best_model_20.pth', 'best_model_30.pth']
+if args.debug:
+    print(f"[DEBUG] Found model files: {model_files}")
 
 for model_file in model_files:
+    if args.debug:
+        print(f"[DEBUG] Loading model: {model_file}")
     model = Net()
-    model.load_state_dict(torch.load(model_file, map_location=device, weights_only=True))
+    model_path = os.path.join(models_dir, model_file)
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     model.to(device)
     models.append(model)
 
-# Create a batched model function using vmap
-def model_forward(model_params, input_data):
-    return torch.func.functional_call(model, model_params, (input_data,))
+if args.debug:
+    print(f"[DEBUG] Loaded {len(models)} models")
 
-# Extract model parameters
-model_params = [dict(model.named_parameters()) for model in models]
+# Create stateless base model and stack states
+base_model = copy.deepcopy(models[0])
+base_model = base_model.to('meta')
+params, buffers = stack_module_state(models)
 
-# Create vectorized version that runs all models in parallel
-batched_forward = torch.func.vmap(model_forward, in_dims=(0, None))
+if args.debug:
+    print("[DEBUG] Stacked parameter shapes:")
+    for k, v in params.items():
+        print(f"  {k}: {v.shape}")
+
+# Define forward function for vmap
+def fmodel(params, buffers, x):
+    return functional_call(base_model, (params, buffers), (x,))
+
+# Create vectorized version
+batched_forward = torch.vmap(fmodel, in_dims=(0, 0, None))
 
 # Initialize CLAHE
 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+
+# After device initialization, add detector initialization
+detector = DetectionInterface(
+    model_path=os.path.join(os.path.dirname(__file__), "best.pt"),
+    conf_threshold=0.95,
+    area=1500
+)
 
 #countdown before beginning
 print("Get ready...")
@@ -147,11 +128,30 @@ try:
         if args.debug:
             print(f"[DEBUG] Cropped image shape: {im.shape}")
         
-        # if detect_stop_sign(im):
-        #     print("STOP SIGN DETECTED!")
-        #     # Immediately stop the robot if stop sign detected
-        #     robot.queue_command(0, 0)
-        #     time.sleep(2)
+        # Check for stop sign
+        detection = detector.get_best_detection(im)
+        current_time = time.time()
+        if detection and detection['class_name'] == 'sign':
+            # Get bounding box coordinates
+            x1, y1, x2, y2 = detection['box']
+            
+            # Check if box is in bottom third and cooldown elapsed
+            image_height = im.shape[0]
+            min_y = 2 * image_height // 3
+            
+            if y2 > min_y and (current_time - last_stop_time) > STOP_COOLDOWN:
+                print("STOP SIGN DETECTED!")
+                robot.queue_command(0, 0)
+                time.sleep(2)
+                last_stop_time = current_time
+                if args.debug:
+                    print(f"[DEBUG] Stop sign detected with confidence: {detection['confidence']:.3f}")
+                    print(f"[DEBUG] Box position: y2={y2}, threshold={min_y}")
+            elif args.debug:
+                if (current_time - last_stop_time) <= STOP_COOLDOWN:
+                    print("[DEBUG] Stop sign ignored - cooldown active")
+                else:
+                    print("[DEBUG] Sign detected but not in bottom third of image")
         else:
             if args.debug:
                 print("[DEBUG] No stop sign detected.")
@@ -175,15 +175,24 @@ try:
         if args.debug:
             print(f"[DEBUG] Running model with: {im_tensor.shape}")
 
-        # Vectorized model ensemble inference
+        # In the main loop, replace inference section with:
         with torch.no_grad():
-            # Run all models in parallel using vmap
-            outputs = batched_forward(model_params, im_tensor)
+            if args.debug:
+                print("[DEBUG] Running inference with:")
+                print(f"  Input shape: {im_tensor.shape}")
+            
+            # Run all models in parallel
+            outputs = batched_forward(params, buffers, im_tensor)
+            
+            if args.debug:
+                print("[DEBUG] Raw outputs shape:", outputs.shape)
+                print("[DEBUG] Individual model outputs:", outputs.cpu().numpy())
             
             # Average predictions
             ensemble_output = torch.mean(outputs, dim=0)
-            speeds = ensemble_output[0].cpu().numpy() * 60.0
-            speeds = np.clip(speeds, 0, 60)
+            if args.debug:
+                print("[DEBUG] Averaged output:", ensemble_output.cpu().numpy())
+            speeds = ensemble_output[0].cpu().numpy() * 60
             speeds = speeds.astype(int)
 
         if args.debug:
