@@ -36,9 +36,7 @@ def is_running_in_ssh():
 #######################################################################################################################################
 transform = transforms.Compose([
     transforms.ToTensor(),
-    transforms.Resize((60, 60)),
-    # Add color jittering for brightness, contrast, and saturation
-    # Using moderate values to preserve overall image structure
+    transforms.Resize((120, 120)),
     transforms.ColorJitter(
         brightness=0.2,  # Brightness variation of ±20%
         contrast=0.2,    # Contrast variation of ±20%
